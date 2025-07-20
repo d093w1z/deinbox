@@ -1,4 +1,4 @@
-# DeInbox 🧹📬
+# ![logo](src/app/favicon.ico) DeInbox 🧹📬
 
 **DeInbox** is a privacy-focused, smart Gmail inbox cleaner that helps you take control of your cluttered inbox. From bulk deletion and one-click unsubscription to intelligent cleanup recommendations, DeInbox simplifies email management for a healthier digital life.
 
