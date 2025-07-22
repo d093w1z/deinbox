@@ -1,14 +1,9 @@
-// Import styles of packages that you've installed.
-// All packages except `@mantine/hooks` require styles imports
 import type {Metadata} from 'next';
 import {Geist, Geist_Mono} from 'next/font/google';
 import './globals.css';
-import '@mantine/core/styles.css';
-import {
-  ColorSchemeScript,
-  MantineProvider,
-  mantineHtmlProps,
-} from '@mantine/core';
+
+import Providers from '@/components/sessionProvider';
+import {ThemeProvider} from '@/components/theme-provider';
 
 const geistSans = Geist({
   variable: '--font-geist-sans',
@@ -32,15 +27,19 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang='en' {...mantineHtmlProps}>
-      <head>
-        <ColorSchemeScript />
-      </head>
+    <html lang='en' suppressHydrationWarning>
+      <head></head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        
-        <MantineProvider>{children}</MantineProvider>
+        <ThemeProvider
+          attribute='class'
+          defaultTheme='system'
+          enableSystem
+          disableTransitionOnChange
+        >
+          <Providers>{children}</Providers>
+        </ThemeProvider>
       </body>
     </html>
   );
