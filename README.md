@@ -16,10 +16,10 @@
 
 - View inbox metrics (total, unread, categories, sizes)
 - Filter emails by:
-  - Age (e.g., older than 1 year)
-  - Category (Promotions, Social, Forums, Updates)
-  - Attachment size
-  - Sender frequency
+    - Age (e.g., older than 1 year)
+    - Category (Promotions, Social, Forums, Updates)
+    - Attachment size
+    - Sender frequency
 - Bulk delete/archive selected emails
 
 ### 📤 Unsubscribe Assistant
