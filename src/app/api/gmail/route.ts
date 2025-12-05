@@ -31,7 +31,7 @@ export async function GET(req: NextRequest) {
         const unsubscribeList = await gmailService.getUnsubscribeInfo();
 
         await cache.set(cacheKey, emails, 1800);
-
+        console.log('Gmail API route fetched emails count:', emails.length);
         return NextResponse.json({
             profile,
             recentEmailCount: emails.length,

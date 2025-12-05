@@ -1,5 +1,5 @@
 import { AppSidebar } from '@/components/app-sidebar';
-import { ChartAreaInteractive } from '@/components/chart-area-interactive';
+// import { ChartAreaInteractive } from '@/components/chart-area-interactive';
 import { SectionCards } from '@/components/section-cards';
 import {
     Breadcrumb,
@@ -12,9 +12,11 @@ import {
 import { Separator } from '@/components/ui/separator';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import React from 'react';
-import GmailStats from '@/components/GmailCard';
 import { redirect } from 'next/navigation';
 import { getServerSession } from 'next-auth';
+import DashboardComponent from '@/components/dashboard-layout';
+import { GmailStatsResponseSchema } from '@/types/GmailStatsResponse';
+import { cookies } from 'next/headers';
 
 export default async function Page() {
     const session = await getServerSession();
@@ -22,6 +24,17 @@ export default async function Page() {
     if (!session) {
         redirect('/login');
     }
+    const res = await fetch(new URL('/emaildata.json', process.env.NEXTAUTH_URL!), {
+        cache: 'no-store',
+        headers: {
+            Cookie: (await cookies()).toString(),
+        },
+    });
+
+    const json = await res.json();
+
+    // Zod validate once — on server
+    const data = GmailStatsResponseSchema.parse(json);
     return (
         <SidebarProvider>
             <AppSidebar />
@@ -52,10 +65,8 @@ export default async function Page() {
                     <div className="@container/main flex flex-1 flex-col gap-2">
                         <div className="flex flex-col gap-4 py-4 md:gap-6 md:py-6">
                             <SectionCards />
-                            <GmailStats />
-                            <div className="px-4 lg:px-6">
-                                <ChartAreaInteractive />
-                            </div>
+
+                            <DashboardComponent data={data} />
                         </div>
                     </div>
                 </div>
