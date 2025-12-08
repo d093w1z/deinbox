@@ -26,8 +26,10 @@ import {
     SelectValue,
 } from '@/components/ui/select';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+// import fetch from 'node-fetch';
+import { GmailStatsResponse } from '@/types/GmailStatsResponse';
 
-export const description = 'An interactive area chart';
+export const description = 'An interactive area chart for emails received over time.';
 
 const chartData = [
     { date: '2024-04-01', desktop: 222, mobile: 150 },
@@ -127,39 +129,37 @@ const chartConfig = {
     visitors: {
         label: 'Visitors',
     },
-    desktop: {
-        label: 'Desktop',
-        color: 'var(--primary)',
-    },
     mobile: {
         label: 'Mobile',
         color: 'var(--primary)',
     },
 } satisfies ChartConfig;
 
-export function ChartAreaInteractive() {
+export function TableChartAreaInteractive({ data }: { data: GmailStatsResponse | null }) {
     const isMobile = useIsMobile();
     const [timeRange, setTimeRange] = React.useState('90d');
 
     React.useEffect(() => {
-        if (isMobile) {
-            setTimeRange('7d');
-        }
+        if (isMobile) setTimeRange('7d');
     }, [isMobile]);
 
-    const filteredData = chartData.filter((item) => {
-        const date = new Date(item.date);
-        const referenceDate = new Date('2024-06-30');
-        let daysToSubtract = 90;
-        if (timeRange === '30d') {
-            daysToSubtract = 30;
-        } else if (timeRange === '7d') {
-            daysToSubtract = 7;
-        }
+    // MEMOIZED filtering (huge improvement)
+    const filteredData = React.useMemo(() => {
+        if (!data) return [];
+
+        const referenceDate = new Date('2025-07-23');
+        let days = timeRange === '7d' ? 7 : timeRange === '30d' ? 30 : 90;
+
         const startDate = new Date(referenceDate);
-        startDate.setDate(startDate.getDate() - daysToSubtract);
-        return date >= startDate;
-    });
+        startDate.setDate(startDate.getDate() - days);
+
+        return data.emails.filter((item) => {
+            const d = new Date(item.date);
+            return d >= startDate;
+        });
+    }, [data, timeRange]);
+
+    // console.log('Filtered Data:', filteredData);
 
     return (
         <Card className="@container/card">
@@ -277,13 +277,13 @@ export function ChartAreaInteractive() {
                             stroke="var(--color-mobile)"
                             stackId="a"
                         />
-                        <Area
+                        {/* <Area
                             dataKey="desktop"
                             type="natural"
                             fill="url(#fillDesktop)"
                             stroke="var(--color-desktop)"
                             stackId="a"
-                        />
+                        /> */}
                     </AreaChart>
                 </ChartContainer>
             </CardContent>
