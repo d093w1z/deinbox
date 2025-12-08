@@ -1,6 +1,7 @@
 import { NextAuthOptions } from 'next-auth';
 import GoogleProvider from 'next-auth/providers/google';
 import { JWT } from 'next-auth/jwt';
+import { db } from './db';
 
 export const authOptions: NextAuthOptions = {
     providers: [
@@ -40,8 +41,34 @@ export const authOptions: NextAuthOptions = {
 
                     token.name = data.name;
                     token.email = data.email;
+                    token.id = data.sub;
                     token.picture = data.picture;
                 }
+            }
+            const res = await db.query('SELECT * FROM users WHERE email = $1', [
+                token.email,
+            ]);
+            const user = res.rows[0];
+
+            // If user doesn't exist, create
+            if (!user) {
+                await db.query(
+                    'INSERT INTO users (name, email, gmail_id, image, access_token_encrypted, refresh_token_encrypted) VALUES ($1, $2, $3, $4, $5, $6)',
+                    [
+                        token.name,
+                        token.email,
+                        token.id,
+                        token.picture,
+                        token.accessToken,
+                        token.refreshToken,
+                    ],
+                );
+            } else {
+                // Update tokens if user exists
+                await db.query(
+                    'UPDATE users SET access_token_encrypted = $1, refresh_token_encrypted = $2 WHERE email = $3',
+                    [token.accessToken, token.refreshToken, token.email],
+                );
             }
 
             // token not expired
@@ -54,7 +81,7 @@ export const authOptions: NextAuthOptions = {
         },
 
         async session({ session, token }) {
-            console.log('Token in session callback:', token);
+            // console.log('Token in session callback:', token);
 
             session.accessToken = token.accessToken;
             session.expires = token.accessTokenExpires!;

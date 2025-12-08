@@ -1,6 +1,9 @@
 import { authOptions } from '@/lib/auth';
 import { getGmailService } from '@/lib/gmail';
 import { getCacheService } from '@/lib/redis';
+import { Email, EmailSchema } from '@/types/EmailSchema';
+import { z } from 'zod';
+import { GmailStatsResponseSchema } from '@/types/GmailStatsResponse';
 import { getServerSession } from 'next-auth';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -17,27 +20,24 @@ export async function GET(req: NextRequest) {
 
         const query = searchParams.get('query') || 'newer_than:7d';
 
-        const cache = getCacheService();
-        const cacheKey = `messages:${session.user.email}:${query}`;
+        let emails: Email[] = [];
 
-        const cached = await cache.get(cacheKey);
-        let emails = [];
-
-        // if (cached) emails = JSON.parse(cached);
-
+        emails = EmailSchema.array().parse(await gmailService.getMessages(query));
         const profile = await gmailService.getProfile();
-        emails = await gmailService.getMessages(query);
         const stats = await gmailService.getEmailStats();
         const unsubscribeList = await gmailService.getUnsubscribeInfo();
 
-        await cache.set(cacheKey, emails, 1800);
+        console.log('Gmail API route fetched emails count:', emails.length);
 
-        return NextResponse.json({
+        let response = GmailStatsResponseSchema.parse({
             profile,
+            emails,
             recentEmailCount: emails.length,
             stats,
             unsubscribeList,
-        });
+        }); // Validate before
+
+        return NextResponse.json(response);
     } catch (error) {
         console.error('Error in Gmail API route:', error);
         return NextResponse.json(

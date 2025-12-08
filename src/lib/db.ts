@@ -28,10 +28,12 @@ if (process.env.NODE_ENV !== 'production') {
 /**
  * Helper for simple queries
  */
-async function query(text: string, params?: any[], p0?: (err: any, res: any) => void): Promise<QueryResult> {
-    console.log('Executing query:', text, params);
+async function query(
+    text: string,
+    params?: any[],
+    p0?: (err: any, res: any) => void,
+): Promise<QueryResult> {
     const res = await pg.query(text, params);
-    console.log('Query result:', res.rows);
     return res;
 }
 export const db = {
