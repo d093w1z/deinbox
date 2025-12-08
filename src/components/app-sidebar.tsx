@@ -11,7 +11,6 @@ import {
     PieChart,
     Settings2,
     SquareTerminal,
-    User,
 } from 'lucide-react';
 
 import { NavMain } from '@/components/nav-main';
@@ -160,10 +159,36 @@ const data = {
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     const { data: session, status } = useSession();
+    const [avatarUrl, setAvatarUrl] = React.useState<string>('');
+
+    React.useEffect(() => {
+        if (status === 'authenticated' && !session.user?.image) {
+            fetch('/api/user/avatar', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ email: session.user?.email }),
+            })
+                .then((res) => res.json())
+                .then((user) => {
+                    if (user.avatar) {
+                        setAvatarUrl(user.avatar);
+                        console.log('Message:', user.message);
+                    }
+                });
+        }
+    }, [status, session]);
+
     if (status === 'authenticated') {
         data.user.name = session.user?.name || 'User';
         data.user.email = session.user?.email || '';
-        data.user.avatar = session.user?.image || User.toString();
+        if (session.user?.image) {
+            data.user.avatar = session.user?.image;
+        } else if (avatarUrl) {
+            data.user.avatar = avatarUrl;
+        }
+        console.log('User avatar URL:', data.user.avatar);
     }
     return (
         <Sidebar collapsible="icon" {...props}>
