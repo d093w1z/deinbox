@@ -50,7 +50,11 @@ export function getCacheService() {
             }
         },
 
-        async set(key: string, data: unknown, ttlSeconds = 3600): Promise<void> {
+        async set(
+            key: string,
+            data: unknown,
+            ttlSeconds = 3600,
+        ): Promise<void> {
             if (!redis || !redisEnabled) return;
 
             try {

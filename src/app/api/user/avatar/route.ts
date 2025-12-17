@@ -17,14 +17,20 @@ export async function POST(req: NextRequest) {
         );
 
         if (!userResult.rows[0]) {
-            return NextResponse.json({ error: 'User not found' }, { status: 404 });
+            return NextResponse.json(
+                { error: 'User not found' },
+                { status: 404 },
+            );
         }
 
         const user = userResult.rows[0];
 
         // Check if sync already in progress
         if (user.image) {
-            return NextResponse.json({ error: 'User avatar not found' }, { status: 404 });
+            return NextResponse.json(
+                { error: 'User avatar not found' },
+                { status: 404 },
+            );
         }
 
         return NextResponse.json({
@@ -34,6 +40,9 @@ export async function POST(req: NextRequest) {
         });
     } catch (error) {
         console.error('Failed to start sync:', error);
-        return NextResponse.json({ error: 'Failed to start sync' }, { status: 500 });
+        return NextResponse.json(
+            { error: 'Failed to start sync' },
+            { status: 500 },
+        );
     }
 }

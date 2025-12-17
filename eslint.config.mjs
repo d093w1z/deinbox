@@ -1,46 +1,115 @@
 import { FlatCompat } from '@eslint/eslintrc';
+import js from '@eslint/js';
+import nextPlugin from '@next/eslint-plugin-next';
+import reactPlugin from 'eslint-plugin-react';
+import hooksPlugin from 'eslint-plugin-react-hooks';
+import tsPlugin from '@typescript-eslint/eslint-plugin';
+import tsParser from '@typescript-eslint/parser';
+import globals from 'globals';
 
 const compat = new FlatCompat({
-    // import.meta.dirname is available after Node.js v20.11.0
     baseDirectory: import.meta.dirname,
 });
 
-const eslintConfig = [
-    ...compat.config({
-        extends: [
-            'next',
-            'next/core-web-vitals',
-            'next/typescript',
-            'plugin:prettier/recommended',
-            'plugin:jsx-a11y/recommended',
-        ],
-        plugins: ['prettier', 'jsx-a11y'],
+export default [
+    // --------------------
+    // Base JS rules
+    // --------------------
+    js.configs.recommended,
+    {
+        languageOptions: {
+            globals: {
+                ...globals.browser,
+                ...globals.node,
+            },
+        },
+    },
+
+    // --------------------
+    // React + Next.js
+    // --------------------
+    {
+        plugins: {
+            '@next/next': nextPlugin,
+            react: reactPlugin,
+            'react-hooks': hooksPlugin,
+        },
+        rules: {
+            ...hooksPlugin.configs.recommended.rules,
+            ...nextPlugin.configs.recommended.rules,
+            ...nextPlugin.configs['core-web-vitals'].rules,
+        },
+    },
+
+    // --------------------
+    // TypeScript (Flat, modern)
+    // --------------------
+    {
+        files: ['**/*.ts', '**/*.tsx'],
+        languageOptions: {
+            parser: tsParser,
+            parserOptions: {
+                ecmaVersion: 'latest',
+                sourceType: 'module',
+                project: './tsconfig.json',
+                tsconfigRootDir: import.meta.dirname,
+            },
+        },
+        plugins: {
+            '@typescript-eslint': tsPlugin,
+        },
+        rules: {
+            ...tsPlugin.configs.recommended.rules,
+            ...tsPlugin.configs['recommended-type-checked'].rules,
+
+            // Optional but practical overrides
+            '@typescript-eslint/no-unused-vars': [
+                'warn',
+                { argsIgnorePattern: '^_' },
+            ],
+            '@typescript-eslint/no-explicit-any': 'warn',
+            '@typescript-eslint/consistent-type-imports': 'error',
+        },
+    },
+
+    // --------------------
+    // Compat-only plugins
+    // --------------------
+    ...compat.extends(
+        'plugin:jsx-a11y/recommended',
+        'plugin:prettier/recommended',
+    ),
+
+    // --------------------
+    // Prettier + custom rules
+    // --------------------
+    {
         rules: {
             'prettier/prettier': [
                 'error',
                 {
-                    trailingComma: 'all',
-                    semi: false,
-                    tabWidth: 2,
-                    singleQuote: true,
                     printWidth: 80,
+                    tabWidth: 4,
+                    singleQuote: true,
+                    trailingComma: 'all',
+                    bracketSpacing: true,
+                    semi: true,
+                    useTabs: false,
+                    bracketSameLine: false,
+                    jsxSingleQuote: true,
                     endOfLine: 'auto',
                     arrowParens: 'always',
                     plugins: ['prettier-plugin-tailwindcss'],
                 },
-                {
-                    usePrettierrc: false,
-                },
             ],
             'react/react-in-jsx-scope': 'off',
-            'jsx-a11y/alt-text': 'warn',
-            'jsx-a11y/aria-props': 'warn',
-            'jsx-a11y/aria-proptypes': 'warn',
-            'jsx-a11y/aria-unsupported-elements': 'warn',
-            'jsx-a11y/role-has-required-aria-props': 'warn',
-            'jsx-a11y/role-supports-aria-props': 'warn',
         },
-    }),
-];
+    },
 
-export default eslintConfig;
+    // --------------------
+    // Ignores
+    // --------------------
+    {
+        ignores: ['.next/*', 'node_modules/*'],
+    },
+];

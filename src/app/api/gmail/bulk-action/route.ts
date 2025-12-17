@@ -12,7 +12,10 @@ export async function POST(req: NextRequest) {
     const { action, messageIds } = await req.json();
 
     if (!action || !Array.isArray(messageIds)) {
-        return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
+        return NextResponse.json(
+            { error: 'Invalid request body' },
+            { status: 400 },
+        );
     }
 
     const gmail = await getGmailService();

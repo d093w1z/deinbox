@@ -10,10 +10,10 @@ export function Logo({ size = 40, className }: LogoProps) {
     return (
         <div className={className}>
             <Image
-                src="/deinbox-logo.svg" // Place your logo file in public/logo.svg
+                src='/deinbox-logo.svg' // Place your logo file in public/logo.svg
                 width={size}
                 height={size}
-                alt="Inbox Cleaner Logo"
+                alt='Inbox Cleaner Logo'
                 priority
             />
         </div>

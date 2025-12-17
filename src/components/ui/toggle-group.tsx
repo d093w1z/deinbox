@@ -7,7 +7,9 @@ import { type VariantProps } from 'class-variance-authority';
 import { cn } from '@/lib/utils';
 import { toggleVariants } from '@/components/ui/toggle';
 
-const ToggleGroupContext = React.createContext<VariantProps<typeof toggleVariants>>({
+const ToggleGroupContext = React.createContext<
+    VariantProps<typeof toggleVariants>
+>({
     size: 'default',
     variant: 'default',
 });
@@ -22,7 +24,7 @@ function ToggleGroup({
     VariantProps<typeof toggleVariants>) {
     return (
         <ToggleGroupPrimitive.Root
-            data-slot="toggle-group"
+            data-slot='toggle-group'
             data-variant={variant}
             data-size={size}
             className={cn(
@@ -50,7 +52,7 @@ function ToggleGroupItem({
 
     return (
         <ToggleGroupPrimitive.Item
-            data-slot="toggle-group-item"
+            data-slot='toggle-group-item'
             data-variant={context.variant || variant}
             data-size={context.size || size}
             className={cn(

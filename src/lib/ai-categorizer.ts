@@ -66,7 +66,14 @@ class AICategorizerService {
             subjectPatterns: ['order #', 'receipt', 'confirmation', 'invoice'],
         },
         social: {
-            keywords: ['friend', 'follow', 'like', 'comment', 'mention', 'tagged'],
+            keywords: [
+                'friend',
+                'follow',
+                'like',
+                'comment',
+                'mention',
+                'tagged',
+            ],
             senderPatterns: [
                 'facebook',
                 'twitter',
@@ -116,9 +123,12 @@ class AICategorizerService {
         };
     }
 
-    private calculateCategoryScores(email: EmailMessage): Record<string, number> {
+    private calculateCategoryScores(
+        email: EmailMessage,
+    ): Record<string, number> {
         const scores: Record<string, number> = {};
-        const text = `${email.subject} ${email.snippet} ${email.from}`.toLowerCase();
+        const text =
+            `${email.subject} ${email.snippet} ${email.from}`.toLowerCase();
 
         Object.entries(this.patterns).forEach(([category, patterns]) => {
             let score = 0;
@@ -161,7 +171,8 @@ class AICategorizerService {
 
     private getReasons(email: EmailMessage, category: string): string[] {
         const reasons: string[] = [];
-        const text = `${email.subject} ${email.snippet} ${email.from}`.toLowerCase();
+        const text =
+            `${email.subject} ${email.snippet} ${email.from}`.toLowerCase();
         const patterns = this.patterns[category as keyof typeof this.patterns];
 
         if (patterns) {
@@ -189,11 +200,16 @@ class AICategorizerService {
         }));
 
         // Suggestion 1: Delete old promotional emails
-        const oldPromotional = categorizedEmails.filter(({ email, category }) => {
-            const sixMonthsAgo = new Date();
-            sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
-            return category.category === 'promotional' && email.date < sixMonthsAgo;
-        });
+        const oldPromotional = categorizedEmails.filter(
+            ({ email, category }) => {
+                const sixMonthsAgo = new Date();
+                sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+                return (
+                    category.category === 'promotional' &&
+                    email.date < sixMonthsAgo
+                );
+            },
+        );
 
         if (oldPromotional.length > 0) {
             suggestions.push({
@@ -228,7 +244,10 @@ class AICategorizerService {
                 confidence: 0.8,
                 impact: {
                     emailsAffected: emails.length,
-                    spaceFreed: emails.reduce((sum, email) => sum + email.size, 0),
+                    spaceFreed: emails.reduce(
+                        (sum, email) => sum + email.size,
+                        0,
+                    ),
                     category: 'newsletter',
                 },
             });
@@ -238,7 +257,9 @@ class AICategorizerService {
         const oldSocial = categorizedEmails.filter(({ email, category }) => {
             const threeMonthsAgo = new Date();
             threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
-            return category.category === 'social' && email.date < threeMonthsAgo;
+            return (
+                category.category === 'social' && email.date < threeMonthsAgo
+            );
         });
 
         if (oldSocial.length > 0) {
@@ -249,7 +270,10 @@ class AICategorizerService {
                 confidence: 0.85,
                 impact: {
                     emailsAffected: oldSocial.length,
-                    spaceFreed: oldSocial.reduce((sum, { email }) => sum + email.size, 0),
+                    spaceFreed: oldSocial.reduce(
+                        (sum, { email }) => sum + email.size,
+                        0,
+                    ),
                     category: 'social',
                 },
             });
@@ -257,7 +281,8 @@ class AICategorizerService {
 
         // Suggestion 4: Delete suspected spam
         const suspectedSpam = categorizedEmails.filter(
-            ({ category }) => category.category === 'spam' && category.confidence > 0.7,
+            ({ category }) =>
+                category.category === 'spam' && category.confidence > 0.7,
         );
 
         if (suspectedSpam.length > 0) {
@@ -309,14 +334,19 @@ class AICategorizerService {
     analyzeInteractionPatterns(emails: EmailMessage[]): {
         lowEngagement: EmailMessage[];
         neverOpened: EmailMessage[];
-        frequentSenders: { sender: string; count: number; lastInteraction?: Date }[];
+        frequentSenders: {
+            sender: string;
+            count: number;
+            lastInteraction?: Date;
+        }[];
         inactiveThreads: EmailMessage[];
     } {
         const neverOpened = emails.filter((email) => email.isUnread);
         const lowEngagement = emails.filter((email) => {
             const category = this.categorizeEmail(email);
             return (
-                category.category === 'newsletter' || category.category === 'promotional'
+                category.category === 'newsletter' ||
+                category.category === 'promotional'
             );
         });
 
@@ -381,7 +411,8 @@ class AICategorizerService {
                             email.date < threeMonthsAgo
                         );
                     }),
-                estimatedImpact: 'High - Removes clutter, keeps recent newsletters',
+                estimatedImpact:
+                    'High - Removes clutter, keeps recent newsletters',
             },
             {
                 name: 'Promotional Emails',
@@ -399,7 +430,8 @@ class AICategorizerService {
                 description: 'Emails with attachments larger than 5MB',
                 query: (emails) =>
                     emails.filter(
-                        (email) => email.hasAttachment && email.size > 5 * 1024 * 1024,
+                        (email) =>
+                            email.hasAttachment && email.size > 5 * 1024 * 1024,
                     ),
                 estimatedImpact: 'High - Frees up significant storage space',
             },
@@ -411,9 +443,13 @@ class AICategorizerService {
                         const oneMonthAgo = new Date();
                         oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
                         const category = this.categorizeEmail(email);
-                        return category.category === 'social' && email.date < oneMonthAgo;
+                        return (
+                            category.category === 'social' &&
+                            email.date < oneMonthAgo
+                        );
                     }),
-                estimatedImpact: 'Medium - Removes outdated social notifications',
+                estimatedImpact:
+                    'Medium - Removes outdated social notifications',
             },
             {
                 name: 'Unread Old Emails',

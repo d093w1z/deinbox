@@ -31,7 +31,10 @@ export async function POST(req: NextRequest) {
 
     const { url } = await req.json();
     if (!url) {
-        return NextResponse.json({ error: 'Unsubscribe URL required' }, { status: 400 });
+        return NextResponse.json(
+            { error: 'Unsubscribe URL required' },
+            { status: 400 },
+        );
     }
 
     const result = await fetch(url, {
@@ -44,6 +47,9 @@ export async function POST(req: NextRequest) {
         await cache.invalidateUserCache(session.user.email);
         return NextResponse.json({ success: true });
     } else {
-        return NextResponse.json({ error: 'Failed to unsubscribe' }, { status: 400 });
+        return NextResponse.json(
+            { error: 'Failed to unsubscribe' },
+            { status: 400 },
+        );
     }
 }
