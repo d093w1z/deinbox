@@ -2,7 +2,8 @@ import { authOptions } from '@/lib/auth';
 import { getGmailService } from '@/lib/gmail';
 import { getCacheService } from '@/lib/redis';
 import { getServerSession } from 'next-auth';
-import { NextRequest, NextResponse } from 'next/server';
+import type { NextRequest } from 'next/server';
+import { NextResponse } from 'next/server';
 
 export async function GET(req: NextRequest) {
     const session = await getServerSession(authOptions);

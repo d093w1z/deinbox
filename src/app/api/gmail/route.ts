@@ -1,48 +1,78 @@
 import { authOptions } from '@/lib/auth';
 import { getGmailService } from '@/lib/gmail';
-import { getCacheService } from '@/lib/redis';
-import { Email, EmailSchema } from '@/types/EmailSchema';
-import { z } from 'zod';
+import type { Email } from '@/types/EmailSchema';
+import { EmailSchema } from '@/types/EmailSchema';
 import { GmailStatsResponseSchema } from '@/types/GmailStatsResponse';
 import { getServerSession } from 'next-auth';
-import { NextRequest, NextResponse } from 'next/server';
+import type { NextRequest } from 'next/server';
+import { NextResponse } from 'next/server';
+import { handleApiError } from '../_utils/handle-api-error';
+
+function computeStatsFromEmails(emails: Email[]) {
+    const oneYearAgo = new Date();
+    oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+
+    const categoryCounts: Record<string, number> = {};
+    const senderFrequency: Record<string, number> = {};
+    let attachmentSize = 0;
+    let unreadCount = 0;
+    let oldEmailsCount = 0;
+
+    for (const email of emails) {
+        categoryCounts[email.category] =
+            (categoryCounts[email.category] || 0) + 1;
+
+        const sender = email.from.match(/<(.+)>/)?.[1] ?? email.from;
+        senderFrequency[sender] = (senderFrequency[sender] || 0) + 1;
+
+        if (email.hasAttachment) attachmentSize += email.size;
+        if (email.isUnread) unreadCount++;
+        if (new Date(email.date) < oneYearAgo) oldEmailsCount++;
+    }
+
+    return {
+        totalEmails: emails.length,
+        unreadCount,
+        categoryCounts,
+        senderFrequency,
+        attachmentSize,
+        oldEmailsCount,
+    };
+}
 
 export async function GET(req: NextRequest) {
     try {
         const session = await getServerSession(authOptions);
         if (!session?.user?.email) {
-            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+            return NextResponse.json(
+                { error: 'Unauthorized' },
+                { status: 401 },
+            );
         }
 
         const gmailService = await getGmailService();
-
         const { searchParams } = new URL(req.url);
-
         const query = searchParams.get('query') || 'newer_than:7d';
 
-        let emails: Email[] = [];
+        const [rawEmails, profile] = await Promise.all([
+            gmailService.getMessages(query),
+            gmailService.getProfile(),
+        ]);
 
-        emails = EmailSchema.array().parse(await gmailService.getMessages(query));
-        const profile = await gmailService.getProfile();
-        const stats = await gmailService.getEmailStats();
-        const unsubscribeList = await gmailService.getUnsubscribeInfo();
+        const emails = EmailSchema.array().parse(rawEmails);
+        const stats = computeStatsFromEmails(emails);
 
-        console.log('Gmail API route fetched emails count:', emails.length);
-
-        let response = GmailStatsResponseSchema.parse({
+        const response = GmailStatsResponseSchema.parse({
             profile,
             emails,
             recentEmailCount: emails.length,
             stats,
-            unsubscribeList,
-        }); // Validate before
+            unsubscribeList: [],
+        });
 
         return NextResponse.json(response);
     } catch (error) {
         console.error('Error in Gmail API route:', error);
-        return NextResponse.json(
-            { error: 'Failed to fetch Gmail data' },
-            { status: 500 },
-        );
+        return handleApiError(error);
     }
 }
