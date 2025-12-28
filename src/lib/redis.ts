@@ -1,4 +1,9 @@
-import { createClient, RedisClientType } from 'redis';
+import type { RedisClientType } from 'redis';
+import { createClient } from 'redis';
+
+if (!process.env.REDIS_URL) {
+    throw new Error('REDIS_URL is not set in environment variables.');
+}
 
 let client: RedisClientType | null = null;
 let redisEnabled = true;
@@ -42,7 +47,7 @@ export function getCacheService() {
 
             try {
                 const data = await redis.get(key);
-                return data ? JSON.parse(data) : null;
+                return data ? (JSON.parse(data) as T) : null;
             } catch (err) {
                 console.error('Redis GET error:', err);
                 redisEnabled = false;
@@ -62,6 +67,39 @@ export function getCacheService() {
             } catch (err) {
                 console.error('Redis SET error:', err);
                 redisEnabled = false;
+            }
+        },
+
+        async del(key: string): Promise<void> {
+            if (!redis || !redisEnabled) return;
+
+            try {
+                await redis.del(key);
+            } catch (err) {
+                console.error('Redis DEL error:', err);
+            }
+        },
+
+        async invalidateUserCache(email: string): Promise<void> {
+            if (!redis || !redisEnabled) return;
+
+            try {
+                const pattern = `*${email}*`;
+                let cursor = '0';
+
+                do {
+                    const result = await redis.scan(cursor, {
+                        MATCH: pattern,
+                        COUNT: 100,
+                    });
+                    cursor = String(result.cursor);
+
+                    if (result.keys.length > 0) {
+                        await redis.del(result.keys);
+                    }
+                } while (cursor !== '0');
+            } catch (err) {
+                console.error('Redis invalidateUserCache error:', err);
             }
         },
     };
