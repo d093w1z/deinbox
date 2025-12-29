@@ -1,7 +1,9 @@
-import { NextAuthOptions } from 'next-auth';
+import type { NextAuthOptions } from 'next-auth';
 import GoogleProvider from 'next-auth/providers/google';
-import { JWT } from 'next-auth/jwt';
+import type { JWT } from 'next-auth/jwt';
 import { db } from './db';
+import { encrypt } from './encryption';
+import { refreshGoogleAccessToken } from './google-oauth';
 
 export const authOptions: NextAuthOptions = {
     providers: [
@@ -27,62 +29,49 @@ export const authOptions: NextAuthOptions = {
 
     callbacks: {
         async jwt({ token, account }) {
-            // First login
             if (account) {
                 token.accessToken = account.access_token;
-                token.refreshToken = account.refresh_token;
-                token.accessTokenExpires = account.expires_at;
+                token.refreshToken =
+                    account.refresh_token ?? token.refreshToken;
+                token.accessTokenExpires = account.expires_at! * 1000;
 
-                // ⭐ Pull Google profile DIRECTLY from id_token
+                // Parse id_token
                 if (account.id_token) {
                     const data = JSON.parse(
-                        Buffer.from(account.id_token.split('.')[1], 'base64').toString(),
+                        Buffer.from(
+                            account.id_token.split('.')[1],
+                            'base64',
+                        ).toString(),
                     );
 
+                    token.sub = data.sub;
                     token.name = data.name;
                     token.email = data.email;
-                    token.id = data.sub;
                     token.picture = data.picture;
                 }
-            }
-            const res = await db.query('SELECT * FROM users WHERE email = $1', [
-                token.email,
-            ]);
-            const user = res.rows[0];
 
-            // If user doesn't exist, create
-            if (!user) {
-                await db.query(
-                    'INSERT INTO users (name, email, gmail_id, image, access_token_encrypted, refresh_token_encrypted) VALUES ($1, $2, $3, $4, $5, $6)',
-                    [
-                        token.name,
-                        token.email,
-                        token.id,
-                        token.picture,
-                        token.accessToken,
-                        token.refreshToken,
-                    ],
-                );
-            } else {
-                // Update tokens if user exists
-                await db.query(
-                    'UPDATE users SET access_token_encrypted = $1, refresh_token_encrypted = $2 WHERE email = $3',
-                    [token.accessToken, token.refreshToken, token.email],
-                );
+                await db.upsertUser({
+                    email: token.email!,
+                    name: token.name!,
+                    gmailId: token.sub!,
+                    image: token.picture,
+                    accessToken: encrypt(token.accessToken!),
+                    refreshToken: token.refreshToken
+                        ? encrypt(token.refreshToken)
+                        : undefined,
+                });
             }
 
-            // token not expired
-            if (Date.now() < (token.accessTokenExpires as number) * 1000) {
+            // Token still valid
+            if (Date.now() < token.accessTokenExpires!) {
                 return token;
             }
 
-            // otherwise refresh
+            // Refresh if expired
             return await refreshAccessToken(token);
         },
 
-        async session({ session, token }) {
-            // console.log('Token in session callback:', token);
-
+        session({ session, token }) {
             session.accessToken = token.accessToken;
             session.expires = token.accessTokenExpires!;
 
@@ -104,29 +93,21 @@ export const authOptions: NextAuthOptions = {
     },
 };
 
-async function refreshAccessToken(token: JWT) {
+async function refreshAccessToken(token: JWT): Promise<JWT> {
     try {
-        const response = await fetch('https://oauth2.googleapis.com/token', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: new URLSearchParams({
-                client_id: process.env.GOOGLE_CLIENT_ID!,
-                client_secret: process.env.GOOGLE_CLIENT_SECRET!,
-                grant_type: 'refresh_token',
-                refresh_token: token.refreshToken!,
-            }),
-        });
+        const refreshed = await refreshGoogleAccessToken(token.refreshToken!);
 
-        const refreshed = await response.json();
-        if (!response.ok) throw refreshed;
+        await db.query(
+            `UPDATE users SET access_token_encrypted = $1 WHERE email = $2`,
+            [encrypt(refreshed.accessToken), token.email],
+        );
 
         return {
             ...token,
-            accessToken: refreshed.access_token,
-            accessTokenExpires: Date.now() + refreshed.expires_in * 1000,
-            refreshToken: refreshed.refresh_token ?? token.refreshToken,
+            accessToken: refreshed.accessToken,
+            accessTokenExpires: Date.now() + refreshed.expiresIn * 1000,
         };
-    } catch (err) {
+    } catch (error) {
         return { ...token, error: 'RefreshAccessTokenError' };
     }
 }

@@ -1,5 +1,4 @@
-import { AdapterUser } from 'next-auth/adapters';
-import { JWT } from 'next-auth/jwt';
+import type { AdapterUser } from 'next-auth/adapters';
 
 declare module 'next-auth' {
     interface Session {
