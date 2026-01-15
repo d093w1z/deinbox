@@ -12,7 +12,8 @@
         "format": "prettier --check './**/*.{js,jsx,ts,tsx,css,md,json}' --config ./.prettierrc",
         "format:fix": "prettier --write './**/*.{js,jsx,ts,tsx,css,md,json}' --config ./.prettierrc",
         "test": "vitest run",
-        "test:watch": "vitest"
+        "test:watch": "vitest",
+        "worker": "tsx src/workers/email-sync.worker.ts"
     },
     "dependencies": {
         "@dnd-kit/core": "^6.3.1",
@@ -34,6 +35,7 @@
         "@radix-ui/react-tooltip": "^1.2.7",
         "@tabler/icons-react": "^3.34.1",
         "@tanstack/react-table": "^8.21.3",
+        "bull": "^1.1.3",
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
         "dayjs": "^1.11.13",
@@ -53,6 +55,7 @@
         "redis": "^5.6.0",
         "sonner": "^2.0.6",
         "tailwind-merge": "^3.3.1",
+        "tsx": "^4.23.0",
         "vaul": "^1.1.2",
         "zod": "^4.0.5"
     },
@@ -63,6 +66,7 @@
         "@eslint/json": "^0.14.0",
         "@next/eslint-plugin-next": "^16.0.7",
         "@tailwindcss/postcss": "^4",
+        "@types/bull": "^3.15.9",
         "@types/node": "^20",
         "@types/pg": "^8.15.6",
         "@types/react": "^19",
@@ -86,5 +90,12 @@
         "typescript": "^5",
         "typescript-eslint": "^8.48.1",
         "vitest": "^4.1.5"
+    },
+    "allowScripts": {
+        "@prisma/client@2.30.3": true,
+        "es5-ext@0.10.64": true,
+        "unrs-resolver@1.11.1": true,
+        "esbuild@0.28.1": true,
+        "sharp@0.34.5": true
     }
 }

@@ -17,14 +17,45 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      redis-bullmq:
+        condition: service_healthy
     environment:
       - DATABASE_URL=${DATABASE_URL}
-      - REDIS_URL=${REDIS_URL}
+      - REDIS_URL=${REDIS_CACHE_URL}
+      - REDIS_BULLMQ_URL=${REDIS_BULLMQ_URL}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - NODE_ENV=development
     volumes:
       - .:/app
       - /app/node_modules
     command: ["npm", "run", "dev"]  # change to "start" for production
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: deinbox-worker
+    mem_limit: 2g
+    cpus: 2
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis-bullmq:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_CACHE_URL}
+      - REDIS_BULLMQ_URL=${REDIS_BULLMQ_URL}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - NODE_ENV=development
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: ["npm", "run", "worker"]
 
   postgres:
     image: postgres:16
@@ -57,11 +88,32 @@ services:
     image: redis:7-alpine
     container_name: redis-server
     restart: always
-    command: ["redis-server", "--appendonly", "yes"]
+    command: >
+      redis-server
+      --maxmemory 2gb
+      --maxmemory-policy allkeys-lru
     ports:
       - "6379:6379"
     volumes:
-      - redis_data:/data
+      - redis_cache_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis-bullmq:
+    image: redis:7
+    container_name: redis-bullmq
+    restart: always
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory-policy noeviction
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_bullmq_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -70,4 +122,5 @@ services:
 
 volumes:
   postgres_data:
-  redis_data:
+  redis_cache_data:
+  redis_bullmq_data:

@@ -109,6 +109,11 @@ CREATE TABLE sync_jobs (
 CREATE INDEX idx_sync_jobs_user ON sync_jobs(user_id);
 CREATE INDEX idx_sync_jobs_status ON sync_jobs(status);
 
+-- Guarantee at most one active (pending/processing) sync job per user at
+-- the database level, since app-level check-then-insert has a race window.
+CREATE UNIQUE INDEX idx_sync_jobs_one_active_per_user ON sync_jobs(user_id)
+    WHERE status IN ('pending', 'processing');
+
 -- Analysis cache table (for expensive computations)
 CREATE TABLE analysis_cache (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
