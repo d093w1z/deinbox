@@ -21,6 +21,7 @@ export default [
             globals: {
                 ...globals.browser,
                 ...globals.node,
+                React: 'writable',
             },
         },
     },
