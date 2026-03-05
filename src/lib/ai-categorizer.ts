@@ -1,5 +1,5 @@
 // lib/ai-categorizer.ts
-import { EmailMessage } from './gmail';
+import type { Email } from '@/types/EmailSchema';
 
 export interface EmailCategory {
     category:
@@ -20,6 +20,7 @@ export interface CleanupSuggestion {
     reason: string;
     confidence: number;
     impact: { emailsAffected: number; spaceFreed: number; category: string };
+    sender?: string;
 }
 
 class AICategorizerService {
@@ -110,7 +111,7 @@ class AICategorizerService {
         },
     };
 
-    categorizeEmail(email: EmailMessage): EmailCategory {
+    categorizeEmail(email: Email): EmailCategory {
         const scores = this.calculateCategoryScores(email);
         const topCategory = Object.entries(scores).reduce((a, b) =>
             scores[a[0]] > scores[b[0]] ? a : b,
@@ -123,9 +124,7 @@ class AICategorizerService {
         };
     }
 
-    private calculateCategoryScores(
-        email: EmailMessage,
-    ): Record<string, number> {
+    private calculateCategoryScores(email: Email): Record<string, number> {
         const scores: Record<string, number> = {};
         const text =
             `${email.subject} ${email.snippet} ${email.from}`.toLowerCase();
@@ -169,7 +168,7 @@ class AICategorizerService {
         return scores;
     }
 
-    private getReasons(email: EmailMessage, category: string): string[] {
+    private getReasons(email: Email, category: string): string[] {
         const reasons: string[] = [];
         const text =
             `${email.subject} ${email.snippet} ${email.from}`.toLowerCase();
@@ -192,7 +191,7 @@ class AICategorizerService {
         return reasons;
     }
 
-    generateCleanupSuggestions(emails: EmailMessage[]): CleanupSuggestion[] {
+    generateCleanupSuggestions(emails: Email[]): CleanupSuggestion[] {
         const suggestions: CleanupSuggestion[] = [];
         const categorizedEmails = emails.map((email) => ({
             email,
@@ -250,6 +249,7 @@ class AICategorizerService {
                     ),
                     category: 'newsletter',
                 },
+                sender,
             });
         });
 
@@ -302,14 +302,96 @@ class AICategorizerService {
             });
         }
 
+        // Suggestion 5: Archive emails with large attachments
+        const largeAttachments = categorizedEmails.filter(
+            ({ email }) => email.hasAttachment && email.size > 5 * 1024 * 1024,
+        );
+
+        if (largeAttachments.length > 0) {
+            suggestions.push({
+                action: 'archive',
+                messageIds: largeAttachments.map(({ email }) => email.id),
+                reason: 'Emails with large attachments (5MB+)',
+                confidence: 0.7,
+                impact: {
+                    emailsAffected: largeAttachments.length,
+                    spaceFreed: largeAttachments.reduce(
+                        (sum, { email }) => sum + email.size,
+                        0,
+                    ),
+                    category: 'attachments',
+                },
+            });
+        }
+
+        // Suggestion 6: Archive old unread emails (never opened, unlikely
+        // to be missed, but not deleted in case they still matter)
+        const oldUnread = categorizedEmails.filter(({ email, category }) => {
+            const sixMonthsAgo = new Date();
+            sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+            return (
+                email.isUnread &&
+                email.date < sixMonthsAgo &&
+                category.category !== 'important'
+            );
+        });
+
+        if (oldUnread.length > 0) {
+            suggestions.push({
+                action: 'archive',
+                messageIds: oldUnread.map(({ email }) => email.id),
+                reason: 'Unread emails older than 6 months',
+                confidence: 0.6,
+                impact: {
+                    emailsAffected: oldUnread.length,
+                    spaceFreed: oldUnread.reduce(
+                        (sum, { email }) => sum + email.size,
+                        0,
+                    ),
+                    category: 'unread',
+                },
+            });
+        }
+
+        // Suggestion 7: Archive stale transactional receipts (kept, just
+        // out of the way — refunds/warranty windows for year-old receipts
+        // have almost always passed)
+        const staleTransactional = categorizedEmails.filter(
+            ({ email, category }) => {
+                const oneYearAgo = new Date();
+                oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+                return (
+                    category.category === 'transactional' &&
+                    email.date < oneYearAgo
+                );
+            },
+        );
+
+        if (staleTransactional.length > 0) {
+            suggestions.push({
+                action: 'archive',
+                messageIds: staleTransactional.map(({ email }) => email.id),
+                reason: 'Receipts and confirmations older than a year',
+                confidence: 0.65,
+                impact: {
+                    emailsAffected: staleTransactional.length,
+                    spaceFreed: staleTransactional.reduce(
+                        (sum, { email }) => sum + email.size,
+                        0,
+                    ),
+                    category: 'transactional',
+                },
+            });
+        }
+
         return suggestions.sort((a, b) => b.confidence - a.confidence);
     }
 
     private getFrequentSenders(
-        categorizedEmails: { email: EmailMessage; category: EmailCategory }[],
+        categorizedEmails: { email: Email; category: EmailCategory }[],
         minCount: number,
-    ): { sender: string; emails: EmailMessage[] }[] {
-        const senderCounts: Record<string, EmailMessage[]> = {};
+    ): { sender: string; emails: Email[] }[] {
+        const senderCounts: Record<string, Email[]> = {};
 
         categorizedEmails.forEach(({ email }) => {
             const sender = this.extractEmail(email.from);
@@ -331,15 +413,15 @@ class AICategorizerService {
     }
 
     // Analyze email interaction patterns
-    analyzeInteractionPatterns(emails: EmailMessage[]): {
-        lowEngagement: EmailMessage[];
-        neverOpened: EmailMessage[];
+    analyzeInteractionPatterns(emails: Email[]): {
+        lowEngagement: Email[];
+        neverOpened: Email[];
         frequentSenders: {
             sender: string;
             count: number;
-            lastInteraction?: Date;
+            lastInteraction?: Date | string;
         }[];
-        inactiveThreads: EmailMessage[];
+        inactiveThreads: Email[];
     } {
         const neverOpened = emails.filter((email) => email.isUnread);
         const lowEngagement = emails.filter((email) => {
@@ -354,7 +436,7 @@ class AICategorizerService {
             string,
             {
                 count: number;
-                lastInteraction?: Date;
+                lastInteraction?: Date | string;
             }
         > = {};
         emails.forEach((email) => {
@@ -390,80 +472,83 @@ class AICategorizerService {
         };
     }
 
-    // Smart filtering based on multiple criteria
-    getSmartFilters(): {
+    // Smart filtering based on multiple criteria. Returns the matched
+    // message ids directly (rather than a filter function) so the result
+    // is JSON-serializable and usable as-is by API clients.
+    getSmartFilters(emails: Email[]): {
         name: string;
         description: string;
-        query: (emails: EmailMessage[]) => EmailMessage[];
         estimatedImpact: string;
+        messageIds: string[];
     }[] {
-        return [
+        const filters: {
+            name: string;
+            description: string;
+            estimatedImpact: string;
+            predicate: (email: Email) => boolean;
+        }[] = [
             {
                 name: 'Old Newsletters',
                 description: 'Newsletter emails older than 3 months',
-                query: (emails) =>
-                    emails.filter((email) => {
-                        const threeMonthsAgo = new Date();
-                        threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
-                        const category = this.categorizeEmail(email);
-                        return (
-                            category.category === 'newsletter' &&
-                            email.date < threeMonthsAgo
-                        );
-                    }),
+                predicate: (email) => {
+                    const threeMonthsAgo = new Date();
+                    threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+                    const category = this.categorizeEmail(email);
+                    return (
+                        category.category === 'newsletter' &&
+                        email.date < threeMonthsAgo
+                    );
+                },
                 estimatedImpact:
                     'High - Removes clutter, keeps recent newsletters',
             },
             {
                 name: 'Promotional Emails',
                 description: 'All promotional and marketing emails',
-                query: (emails) =>
-                    emails.filter((email) => {
-                        const category = this.categorizeEmail(email);
-                        return category.category === 'promotional';
-                    }),
+                predicate: (email) =>
+                    this.categorizeEmail(email).category === 'promotional',
                 estimatedImpact:
                     'Medium - Removes marketing emails, may include wanted offers',
             },
             {
                 name: 'Large Attachments',
                 description: 'Emails with attachments larger than 5MB',
-                query: (emails) =>
-                    emails.filter(
-                        (email) =>
-                            email.hasAttachment && email.size > 5 * 1024 * 1024,
-                    ),
+                predicate: (email) =>
+                    email.hasAttachment && email.size > 5 * 1024 * 1024,
                 estimatedImpact: 'High - Frees up significant storage space',
             },
             {
                 name: 'Old Social Notifications',
                 description: 'Social media notifications older than 1 month',
-                query: (emails) =>
-                    emails.filter((email) => {
-                        const oneMonthAgo = new Date();
-                        oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
-                        const category = this.categorizeEmail(email);
-                        return (
-                            category.category === 'social' &&
-                            email.date < oneMonthAgo
-                        );
-                    }),
+                predicate: (email) => {
+                    const oneMonthAgo = new Date();
+                    oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
+                    const category = this.categorizeEmail(email);
+                    return (
+                        category.category === 'social' &&
+                        email.date < oneMonthAgo
+                    );
+                },
                 estimatedImpact:
                     'Medium - Removes outdated social notifications',
             },
             {
                 name: 'Unread Old Emails',
                 description: 'Unread emails older than 6 months',
-                query: (emails) =>
-                    emails.filter((email) => {
-                        const sixMonthsAgo = new Date();
-                        sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
-                        return email.isUnread && email.date < sixMonthsAgo;
-                    }),
+                predicate: (email) => {
+                    const sixMonthsAgo = new Date();
+                    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+                    return email.isUnread && email.date < sixMonthsAgo;
+                },
                 estimatedImpact:
                     'Medium - Likely irrelevant, but may contain important items',
             },
         ];
+
+        return filters.map(({ predicate, ...rest }) => ({
+            ...rest,
+            messageIds: emails.filter(predicate).map((email) => email.id),
+        }));
     }
 }
 
