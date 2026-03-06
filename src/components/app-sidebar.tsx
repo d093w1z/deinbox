@@ -2,26 +2,26 @@
 
 import * as React from 'react';
 import {
-    AudioWaveform,
     BookOpen,
-    Bot,
-    Command,
+    FolderSync,
     Frame,
+    Inbox,
+    LayoutDashboardIcon,
+    LucideBrushCleaning,
+    Mail,
     Map,
     PieChart,
     Settings2,
-    SquareTerminal,
 } from 'lucide-react';
 
 import { NavMain } from '@/components/nav-main';
-import { NavProjects } from '@/components/nav-projects';
 import { NavUser } from '@/components/nav-user';
-import { TeamSwitcher } from '@/components/team-switcher';
 import {
     Sidebar,
     SidebarContent,
     SidebarFooter,
     SidebarHeader,
+    SidebarMenuButton,
     SidebarRail,
 } from '@/components/ui/sidebar';
 import { useSession } from 'next-auth/react';
@@ -29,113 +29,61 @@ import { Logo } from './logo';
 
 // This is sample data.
 const data = {
-    user: {
-        name: '',
-        email: '',
-        avatar: '',
-    },
     teams: [
         {
             name: 'Deinbox',
             logo: Logo,
             plan: 'Enterprise',
         },
-        {
-            name: 'Acme Corp.',
-            logo: AudioWaveform,
-            plan: 'Startup',
-        },
-        {
-            name: 'Evil Corp.',
-            logo: Command,
-            plan: 'Free',
-        },
     ],
     navMain: [
         {
-            title: 'Playground',
+            title: 'Sync Status',
+            url: '/sync-status',
+            icon: FolderSync,
+            isActive: true,
+        },
+        {
+            title: 'Dashboard',
+            url: '/dashboard',
+            icon: LayoutDashboardIcon,
+            isActive: true,
+        },
+        {
+            title: 'Emails',
+            url: '/emails',
+            icon: Inbox,
+            isActive: true,
+        },
+        {
+            title: 'Clean Inbox',
             url: '#',
-            icon: SquareTerminal,
+            icon: LucideBrushCleaning,
             isActive: true,
             items: [
                 {
-                    title: 'History',
-                    url: '#',
+                    title: 'Suggestions',
+                    url: '/suggestions',
                 },
                 {
-                    title: 'Starred',
-                    url: '#',
+                    title: 'Sender Groups',
+                    url: '/sender-groups',
                 },
                 {
-                    title: 'Settings',
-                    url: '#',
+                    title: 'Category Groups',
+                    url: '/category-groups',
                 },
             ],
         },
         {
-            title: 'Models',
-            url: '#',
-            icon: Bot,
-            items: [
-                {
-                    title: 'Genesis',
-                    url: '#',
-                },
-                {
-                    title: 'Explorer',
-                    url: '#',
-                },
-                {
-                    title: 'Quantum',
-                    url: '#',
-                },
-            ],
-        },
-        {
-            title: 'Documentation',
-            url: '#',
-            icon: BookOpen,
-            items: [
-                {
-                    title: 'Introduction',
-                    url: '#',
-                },
-                {
-                    title: 'Get Started',
-                    url: '#',
-                },
-                {
-                    title: 'Tutorials',
-                    url: '#',
-                },
-                {
-                    title: 'Changelog',
-                    url: '#',
-                },
-            ],
+            title: 'Unsubscribe',
+            url: '/unsubscribe',
+            icon: Mail,
         },
         {
             title: 'Settings',
-            url: '#',
+            url: '/settings',
             icon: Settings2,
-            items: [
-                {
-                    title: 'General',
-                    url: '#',
-                },
-                {
-                    title: 'Team',
-                    url: '#',
-                },
-                {
-                    title: 'Billing',
-                    url: '#',
-                },
-                {
-                    title: 'Limits',
-                    url: '#',
-                },
-            ],
         },
     ],
     projects: [
@@ -163,44 +111,54 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 
     React.useEffect(() => {
         if (status === 'authenticated' && !session.user?.image) {
-            fetch('/api/user/avatar', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ email: session.user?.email }),
-            })
+            fetch('/api/user/avatar')
                 .then((res) => res.json())
-                .then((user) => {
-                    if (user.avatar) {
-                        setAvatarUrl(user.avatar);
-                        console.log('Message:', user.message);
+                .then((data) => {
+                    if (data.image) {
+                        setAvatarUrl(data.image);
                     }
-                });
+                })
+                .catch(() => {});
         }
     }, [status, session]);
 
-    if (status === 'authenticated') {
-        data.user.name = session.user?.name || 'User';
-        data.user.email = session.user?.email || '';
-        if (session.user?.image) {
-            data.user.avatar = session.user?.image;
-        } else if (avatarUrl) {
-            data.user.avatar = avatarUrl;
+    const user = React.useMemo(() => {
+        if (status !== 'authenticated') {
+            return { name: '', email: '', avatar: '' };
         }
-        console.log('User avatar URL:', data.user.avatar);
-    }
+        return {
+            name: session.user?.name || 'User',
+            email: session.user?.email || '',
+            avatar: session.user?.image || avatarUrl,
+        };
+    }, [status, session, avatarUrl]);
+    const [activeTeam] = React.useState(data.teams[0]);
     return (
-        <Sidebar collapsible="icon" {...props}>
+        <Sidebar collapsible='icon' {...props}>
             <SidebarHeader>
-                <TeamSwitcher teams={data.teams} />
+                {/* <TeamSwitcher teams={data.teams} /> */}
+                <SidebarMenuButton
+                    size='lg'
+                    className='data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground'
+                >
+                    <div className='bg-sidebar-primary text-sidebar-primary-foreground flex aspect-square size-8 items-center justify-center rounded-lg'>
+                        <activeTeam.logo className='size-auto' />
+                    </div>
+                    <div className='grid flex-1 text-left text-sm leading-tight'>
+                        <span className='truncate font-medium'>
+                            {activeTeam.name}
+                        </span>
+                        <span className='truncate text-xs'>
+                            {activeTeam.plan}
+                        </span>
+                    </div>
+                </SidebarMenuButton>
             </SidebarHeader>
             <SidebarContent>
                 <NavMain items={data.navMain} />
-                <NavProjects projects={data.projects} />
             </SidebarContent>
             <SidebarFooter>
-                <NavUser user={data.user} />
+                <NavUser user={user} />
             </SidebarFooter>
             <SidebarRail />
         </Sidebar>
