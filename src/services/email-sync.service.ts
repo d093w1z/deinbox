@@ -46,6 +46,12 @@ function isTransientNetworkError(error: unknown): boolean {
 // as fatal for the whole sync rather than a per-message failure.
 class TokenRefreshFailedError extends Error {}
 
+// Thrown when the user has cancelled the sync (sync_jobs.status flipped to
+// 'cancelled' by /api/sync/cancel while this job was running). Unwinds the
+// same way TokenRefreshFailedError does, but callers must not overwrite the
+// user-initiated 'cancelled' status with 'failed' on the way out.
+export class SyncCancelledError extends Error {}
+
 function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -106,6 +112,21 @@ export class EmailSyncService {
         }
     }
 
+    // Cooperative cancellation: /api/sync/cancel flips sync_jobs.status to
+    // 'cancelled' out-of-band, and the running sync polls for that between
+    // batches of work rather than being killed. This keeps a cancel
+    // request responsive (checked every ~5 messages, not just between
+    // whole 500-message chunks) without needing any cross-process signaling.
+    private async checkCancelled(jobId: string): Promise<void> {
+        const result = await db.query<{ status: string }>(
+            'SELECT status FROM sync_jobs WHERE id = $1',
+            [jobId],
+        );
+        if (result.rows[0]?.status === 'cancelled') {
+            throw new SyncCancelledError('Sync cancelled by user');
+        }
+    }
+
     async performFullSync(userId: string, jobId: string): Promise<void> {
         let statusAlreadyFinalized = false;
         try {
@@ -124,6 +145,11 @@ export class EmailSyncService {
                 decrypt(user.rows[0].access_token_encrypted),
                 userId,
             );
+
+            // Bail out before ever touching status if the job was
+            // cancelled while still queued — otherwise this write would
+            // clobber 'cancelled' back to 'processing'.
+            await this.checkCancelled(jobId);
 
             // Update job status
             await updateJobStatus(jobId, 'processing', 0, 0);
@@ -148,6 +174,8 @@ export class EmailSyncService {
 
             // Step 1: Fetch all message IDs (fast)
             do {
+                await this.checkCancelled(jobId);
+
                 const listResponse = await gmail.client.users.messages.list({
                     userId: 'me',
                     maxResults: 500,
@@ -233,6 +261,13 @@ export class EmailSyncService {
 
             await updateJobStatus(jobId, 'completed', 100, messageIds.length);
         } catch (error) {
+            if (error instanceof SyncCancelledError) {
+                // sync_jobs/users were already set to 'cancelled' by the
+                // API route that requested it — nothing left to reconcile
+                // here, just stop and let the worker discard the job.
+                console.log(`[sync ${jobId}] cancelled by user`);
+                throw error;
+            }
             console.error(
                 `[sync ${jobId}] full sync failed for user ${userId}: ${summarizeError(error)}`,
             );
@@ -254,6 +289,7 @@ export class EmailSyncService {
     }
 
     async performIncrementalSync(userId: string, jobId: string): Promise<void> {
+        let statusAlreadyFinalized = false;
         try {
             const user = await db.query('SELECT * FROM users WHERE id = $1', [
                 userId,
@@ -271,6 +307,8 @@ export class EmailSyncService {
                 decrypt(user.rows[0].access_token_encrypted),
                 userId,
             );
+
+            await this.checkCancelled(jobId);
 
             await updateJobStatus(jobId, 'processing', 0, 0);
 
@@ -298,6 +336,7 @@ export class EmailSyncService {
 
             const changes = historyResponse.data.history;
             let processedCount = 0;
+            let failedMessages = 0;
 
             await db.query(
                 'UPDATE sync_jobs SET total_items = $1 WHERE id = $2',
@@ -305,15 +344,18 @@ export class EmailSyncService {
             );
 
             for (const change of changes) {
+                await this.checkCancelled(jobId);
+
                 // Handle added messages
                 if (change.messagesAdded) {
                     for (const added of change.messagesAdded) {
-                        await this.fetchAndStoreMessage(
+                        const ok = await this.fetchAndStoreMessage(
                             gmail,
                             userId,
                             added.message!.id!,
                             refreshTokenEncrypted,
                         );
+                        if (!ok) failedMessages++;
                     }
                 }
 
@@ -342,6 +384,29 @@ export class EmailSyncService {
                 );
             }
 
+            if (failedMessages > 0) {
+                // Deliberately don't advance history_id here: leaving it
+                // pointing at the same spot means the next incremental
+                // sync re-walks these same changes (idempotent thanks to
+                // the ON CONFLICT upsert) and gets another chance to fetch
+                // the messages that failed this time.
+                statusAlreadyFinalized = true;
+                const message = `${failedMessages} of ${changes.length} changes failed to sync`;
+
+                await db.query(
+                    'UPDATE users SET sync_status = $1 WHERE id = $2',
+                    ['failed', userId],
+                );
+                await updateJobStatus(
+                    jobId,
+                    'failed',
+                    100,
+                    changes.length,
+                    message,
+                );
+                throw new Error(message);
+            }
+
             // Update history ID
             await db.query(
                 'UPDATE users SET sync_status = $1, history_id = $2, last_sync_at = NOW() WHERE id = $3',
@@ -350,20 +415,26 @@ export class EmailSyncService {
 
             await updateJobStatus(jobId, 'completed', 100, changes.length);
         } catch (error) {
+            if (error instanceof SyncCancelledError) {
+                console.log(`[sync ${jobId}] cancelled by user`);
+                throw error;
+            }
             console.error(
                 `[sync ${jobId}] incremental sync failed for user ${userId}: ${summarizeError(error)}`,
             );
-            await updateJobStatus(
-                jobId,
-                'failed',
-                0,
-                undefined,
-                (error as Error).message,
-            );
-            await db.query('UPDATE users SET sync_status = $1 WHERE id = $2', [
-                'failed',
-                userId,
-            ]);
+            if (!statusAlreadyFinalized) {
+                await updateJobStatus(
+                    jobId,
+                    'failed',
+                    0,
+                    undefined,
+                    (error as Error).message,
+                );
+                await db.query(
+                    'UPDATE users SET sync_status = $1 WHERE id = $2',
+                    ['failed', userId],
+                );
+            }
             throw error;
         }
     }
@@ -392,6 +463,8 @@ export class EmailSyncService {
             // used to burst hundreds of concurrent requests and blow
             // through Gmail's per-minute quota).
             for (const subChunk of this.chunkArray(chunk, this.concurrency)) {
+                await this.checkCancelled(jobId);
+
                 const results = await Promise.all(
                     subChunk.map((id) =>
                         this.fetchAndStoreMessage(

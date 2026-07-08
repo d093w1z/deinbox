@@ -4,7 +4,10 @@ import {
     enqueueSyncJob,
     PRIORITY,
 } from '../jobs/email-sync.queue';
-import { EmailSyncService } from '../services/email-sync.service';
+import {
+    EmailSyncService,
+    SyncCancelledError,
+} from '../services/email-sync.service';
 import { SuggestionsService } from '../services/suggestions.service';
 import { db } from '../lib/db';
 
@@ -63,6 +66,16 @@ async function start() {
 
             return { success: true, userId };
         } catch (error) {
+            if (error instanceof SyncCancelledError) {
+                // Already reflected in sync_jobs/users by /api/sync/cancel
+                // — just make sure Bull doesn't auto-retry a job the user
+                // deliberately stopped (defaultJobOptions.attempts: 3).
+                console.log(
+                    `[sync ${syncJobId}] cancelled by user after ${Date.now() - startedAt}ms`,
+                );
+                await job.discard();
+                throw error;
+            }
             console.error(
                 `[sync ${syncJobId}] failed for user ${userId} after ${Date.now() - startedAt}ms:`,
                 error instanceof Error ? error.message : error,
