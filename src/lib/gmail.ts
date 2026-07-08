@@ -1,50 +1,60 @@
-import { gmail_v1, google } from 'googleapis';
+import type { gmail_v1 } from 'googleapis';
+import { google } from 'googleapis';
 import { getServerSession } from 'next-auth';
 
 import { authOptions } from './auth';
 import { getCacheService } from './redis';
-import { Email } from '@/types/EmailSchema';
-import { EmailStats } from '@/types/EmailStats';
-import { UnsubscribeInfo } from '@/types/UnsubscribeInfo';
+import type { Email } from '@/types/EmailSchema';
+import type { EmailStats } from '@/types/EmailStats';
+import type { UnsubscribeInfo } from '@/types/UnsubscribeInfo';
+import { mapGmailError } from './gmail-error';
 class GmailService {
     private gmail: gmail_v1.Gmail;
+    private auth: InstanceType<typeof google.auth.OAuth2>;
     private cache = getCacheService();
     private userId: string;
 
     constructor(accessToken: string, userId: string) {
-        const auth = new google.auth.OAuth2();
-        auth.setCredentials({ access_token: accessToken });
-        this.gmail = google.gmail({ version: 'v1', auth });
+        this.auth = new google.auth.OAuth2();
+        this.auth.setCredentials({ access_token: accessToken });
+        this.gmail = google.gmail({ version: 'v1', auth: this.auth });
         this.userId = userId;
+    }
+
+    get client(): gmail_v1.Gmail {
+        return this.gmail;
+    }
+
+    // Swaps in a freshly-refreshed access token. Callers keep using the
+    // same GmailService/client instance — its underlying OAuth2Client is
+    // mutated in place, so every subsequent request (including ones
+    // already in flight when this is called) picks up the new token.
+    updateAccessToken(accessToken: string): void {
+        this.auth.setCredentials({ access_token: accessToken });
     }
 
     private getCacheKey(prefix: string, ...parts: string[]): string {
         return `gmail:${this.userId}:${prefix}:${parts.join(':')}`;
     }
 
-    async getProfile() {
+    async getProfile(): Promise<gmail_v1.Schema$Profile> {
         const cacheKey = this.getCacheKey('profile');
 
         try {
-            // Try to get from cache
-            const cached = await this.cache.get<gmail_v1.Schema$Profile>(cacheKey);
-            if (cached) {
-                return cached;
-            }
+            const cached = await this.cache.get(cacheKey);
+            if (cached) return cached;
 
-            // Fetch from API
-            const response = await this.gmail.users.getProfile({ userId: 'me' });
-
-            // Cache for 1 hour
+            const response = await this.gmail.users.getProfile({
+                userId: 'me',
+            });
             await this.cache.set(cacheKey, response.data, 3600);
 
             return response.data;
         } catch (error) {
-            console.error('Error getting profile:', error);
-            throw new Error('Failed to get Gmail profile');
+            console.error('Gmail profile error:', error);
+            mapGmailError(error);
         }
     }
-
     async getMessages(query?: string, maxResults = 50): Promise<Email[]> {
         const cacheKey = this.getCacheKey(
             'messages',
@@ -76,15 +86,18 @@ class GmailService {
             }
 
             const messages = await Promise.all(
-                listResponse.data.messages.map(async (msg: gmail_v1.Schema$Message) => {
-                    const messageResponse = await this.gmail.users.messages.get({
-                        userId: 'me',
-                        id: msg.id!,
-                        format: 'full',
-                    });
+                listResponse.data.messages.map(
+                    async (msg: gmail_v1.Schema$Message) => {
+                        const messageResponse =
+                            await this.gmail.users.messages.get({
+                                userId: 'me',
+                                id: msg.id!,
+                                format: 'full',
+                            });
 
-                    return this.parseMessage(messageResponse.data);
-                }),
+                        return this.parseMessage(messageResponse.data);
+                    },
+                ),
             );
 
             const filteredMessages = messages.filter(Boolean);
@@ -93,9 +106,9 @@ class GmailService {
             await this.cache.set(cacheKey, filteredMessages, 300);
 
             return filteredMessages;
-        } catch (error) {
+        } catch (error: unknown) {
             console.error('Error getting messages:', error);
-            throw new Error('Failed to get Gmail messages');
+            mapGmailError(error);
         }
     }
 
@@ -132,7 +145,8 @@ class GmailService {
 
                 // Sender frequency
                 const sender = this.extractEmail(message.from);
-                stats.senderFrequency[sender] = (stats.senderFrequency[sender] || 0) + 1;
+                stats.senderFrequency[sender] =
+                    (stats.senderFrequency[sender] || 0) + 1;
 
                 // Attachment size
                 stats.attachmentSize += message.size;
@@ -149,7 +163,7 @@ class GmailService {
             return stats;
         } catch (error) {
             console.error('Error getting email stats:', error);
-            throw new Error('Failed to get email statistics');
+            mapGmailError(error);
         }
     }
 
@@ -161,11 +175,11 @@ class GmailService {
                 ),
             );
 
-            // Invalidate relevant caches after deletion
             await this.invalidateMessageCaches();
         } catch (error) {
             console.error('Error deleting messages:', error);
-            throw new Error('Failed to delete messages');
+
+            mapGmailError(error);
         }
     }
 
@@ -176,7 +190,6 @@ class GmailService {
                 requestBody: { ids: messageIds, removeLabelIds: ['INBOX'] },
             });
 
-            // Invalidate relevant caches after archiving
             await this.invalidateMessageCaches();
         } catch (error) {
             console.error('Error archiving messages:', error);
@@ -195,7 +208,9 @@ class GmailService {
             }
 
             // Fetch promotional emails
-            const promotionalEmails = await this.getMessages('category:promotions');
+            const promotionalEmails = await this.getMessages(
+                'category:promotions',
+            );
             const unsubscribeInfo: UnsubscribeInfo[] = [];
 
             for (const message of promotionalEmails) {
@@ -213,8 +228,10 @@ class GmailService {
 
                 if (unsubscribeHeader) {
                     const unsubscribeValue = unsubscribeHeader.value;
-                    const urlMatch = unsubscribeValue!.match(/<(https?:\/\/[^>]+)>/);
-                    const emailMatch = unsubscribeValue!.match(/<mailto:([^>]+)>/);
+                    const urlMatch =
+                        unsubscribeValue!.match(/<(https?:\/\/[^>]+)>/);
+                    const emailMatch =
+                        unsubscribeValue!.match(/<mailto:([^>]+)>/);
 
                     unsubscribeInfo.push({
                         messageId: message.id,
@@ -268,20 +285,8 @@ class GmailService {
         return this.getMessages(query.trim());
     }
 
-    /**
-     * Invalidate all message-related caches when messages are modified
-     */
     private async invalidateMessageCaches(): Promise<void> {
-        // Note: This is a simple implementation. In production, you might want to use
-        // Redis patterns to delete multiple keys at once, or use a more sophisticated
-        // cache invalidation strategy.
-
-        // For now, we can't easily delete all cache keys without scanning,
-        // so we'll rely on TTL expiration. Alternatively, you could maintain
-        // a set of cache keys and delete them explicitly.
-
-        console.log('Cache invalidation triggered for user:', this.userId);
-        // If you need immediate invalidation, implement key tracking or use Redis SCAN
+        await this.cache.invalidateUserCache(this.userId);
     }
 
     private parseMessage(messageData: gmail_v1.Schema$Message): Email {
@@ -297,7 +302,8 @@ class GmailService {
         let category: Email['category'] = 'primary';
 
         if (labels.includes('CATEGORY_SOCIAL')) category = 'social';
-        else if (labels.includes('CATEGORY_PROMOTIONS')) category = 'promotions';
+        else if (labels.includes('CATEGORY_PROMOTIONS'))
+            category = 'promotions';
         else if (labels.includes('CATEGORY_UPDATES')) category = 'updates';
         else if (labels.includes('CATEGORY_FORUMS')) category = 'forums';
 
@@ -345,7 +351,7 @@ export async function getGmailService() {
     // Use user email or ID as cache key identifier
     const userId = session.user?.email || session.user?.id || 'default';
 
-    return new GmailService(session.accessToken as string, userId);
+    return new GmailService(session.accessToken, userId);
 }
 
 export { GmailService };

@@ -3,7 +3,8 @@ import type { gmail_v1 } from 'googleapis';
 
 import { GmailService } from '../lib/gmail';
 import { db } from '@/lib/db';
-import { decrypt } from '@/lib/encryption';
+import { decrypt, encrypt } from '@/lib/encryption';
+import { refreshGoogleAccessToken } from '@/lib/google-oauth';
 import { updateJobStatus } from '@/lib/sync-job';
 
 function isRateLimitError(error: unknown): boolean {
@@ -11,6 +12,17 @@ function isRateLimitError(error: unknown): boolean {
     if (err?.code === 429) return true;
     return err?.code === 403 && /quota|rate limit/i.test(err.message ?? '');
 }
+
+function isAuthError(error: unknown): boolean {
+    const err = error as { code?: number } | undefined;
+    return err?.code === 401;
+}
+
+// Thrown when a mid-sync token refresh itself fails (e.g. the refresh
+// token was revoked). Unlike a single message failing to fetch, this
+// means every remaining request will fail the same way, so it's treated
+// as fatal for the whole sync rather than a per-message failure.
+class TokenRefreshFailedError extends Error {}
 
 function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -29,7 +41,51 @@ export class EmailSyncService {
     private concurrency = 5; // Parallel API requests
     private maxRetries = 4;
 
+    // Dedupes concurrent mid-sync token refreshes: multiple in-flight
+    // requests can all hit a 401 around the same time, but only one
+    // refresh call should actually go out.
+    private tokenRefreshPromise: Promise<string> | null = null;
+
+    private async ensureFreshToken(
+        gmail: GmailService,
+        userId: string,
+        refreshTokenEncrypted: string | null,
+    ): Promise<string> {
+        if (!refreshTokenEncrypted) {
+            throw new TokenRefreshFailedError(
+                'Access token expired and no refresh token is stored for this user',
+            );
+        }
+
+        if (!this.tokenRefreshPromise) {
+            this.tokenRefreshPromise = (async () => {
+                try {
+                    const refreshed = await refreshGoogleAccessToken(
+                        decrypt(refreshTokenEncrypted),
+                    );
+                    await db.query(
+                        'UPDATE users SET access_token_encrypted = $1 WHERE id = $2',
+                        [encrypt(refreshed.accessToken), userId],
+                    );
+                    gmail.updateAccessToken(refreshed.accessToken);
+                    return refreshed.accessToken;
+                } catch (error) {
+                    throw new TokenRefreshFailedError(
+                        `Failed to refresh access token: ${summarizeError(error)}`,
+                    );
+                }
+            })();
+        }
+
+        try {
+            return await this.tokenRefreshPromise;
+        } finally {
+            this.tokenRefreshPromise = null;
+        }
+    }
+
     async performFullSync(userId: string, jobId: string): Promise<void> {
+        let statusAlreadyFinalized = false;
         try {
             const user = await db.query('SELECT * FROM users WHERE id = $1', [
                 userId,
@@ -38,6 +94,9 @@ export class EmailSyncService {
             if (!user.rows[0]) {
                 throw new Error('User not found');
             }
+
+            const refreshTokenEncrypted: string | null =
+                user.rows[0].refresh_token_encrypted ?? null;
 
             const gmail = new GmailService(
                 decrypt(user.rows[0].access_token_encrypted),
@@ -96,16 +155,44 @@ export class EmailSyncService {
             );
 
             // Step 2: Batch fetch message details (with concurrency control)
-            await this.batchFetchAndStore(
+            const { succeeded, failed } = await this.batchFetchAndStore(
                 gmail,
                 userId,
                 messageIds,
                 jobId,
                 totalMessages,
+                refreshTokenEncrypted,
             );
 
             // Step 3: Compute sender statistics
             await this.computeSenderStats(userId);
+
+            if (failed > 0) {
+                // Some messages never made it into Postgres (e.g. a token
+                // refresh failure partway through, or requests that
+                // exhausted their retries). Reflect that honestly instead
+                // of marking the sync 'completed' — a caller checking
+                // sync_status needs to know the data is incomplete.
+                statusAlreadyFinalized = true;
+                const progress =
+                    messageIds.length > 0
+                        ? Math.floor((succeeded / messageIds.length) * 100)
+                        : 0;
+                const message = `${failed} of ${messageIds.length} messages failed to sync`;
+
+                await db.query(
+                    'UPDATE users SET sync_status = $1, last_sync_at = NOW(), total_emails = $2 WHERE id = $3',
+                    ['failed', succeeded, userId],
+                );
+                await updateJobStatus(
+                    jobId,
+                    'failed',
+                    progress,
+                    succeeded,
+                    message,
+                );
+                throw new Error(message);
+            }
 
             // Update user sync status
             await db.query(
@@ -118,17 +205,19 @@ export class EmailSyncService {
             console.error(
                 `[sync ${jobId}] full sync failed for user ${userId}: ${summarizeError(error)}`,
             );
-            await updateJobStatus(
-                jobId,
-                'failed',
-                0,
-                undefined,
-                (error as Error).message,
-            );
-            await db.query('UPDATE users SET sync_status = $1 WHERE id = $2', [
-                'failed',
-                userId,
-            ]);
+            if (!statusAlreadyFinalized) {
+                await updateJobStatus(
+                    jobId,
+                    'failed',
+                    0,
+                    undefined,
+                    (error as Error).message,
+                );
+                await db.query(
+                    'UPDATE users SET sync_status = $1 WHERE id = $2',
+                    ['failed', userId],
+                );
+            }
             throw error;
         }
     }
@@ -143,6 +232,9 @@ export class EmailSyncService {
                 // No history ID, perform full sync instead
                 return this.performFullSync(userId, jobId);
             }
+
+            const refreshTokenEncrypted: string | null =
+                user.rows[0].refresh_token_encrypted ?? null;
 
             const gmail = new GmailService(
                 decrypt(user.rows[0].access_token_encrypted),
@@ -185,6 +277,7 @@ export class EmailSyncService {
                             gmail,
                             userId,
                             added.message!.id!,
+                            refreshTokenEncrypted,
                         );
                     }
                 }
@@ -246,7 +339,8 @@ export class EmailSyncService {
         messageIds: string[],
         jobId: string,
         totalMessages: number,
-    ): Promise<void> {
+        refreshTokenEncrypted: string | null,
+    ): Promise<{ succeeded: number; failed: number }> {
         const chunks = this.chunkArray(messageIds, this.batchSize);
         let processedTotal = 0;
         let succeeded = 0;
@@ -265,7 +359,12 @@ export class EmailSyncService {
             for (const subChunk of this.chunkArray(chunk, this.concurrency)) {
                 const results = await Promise.all(
                     subChunk.map((id) =>
-                        this.fetchAndStoreMessage(gmail, userId, id),
+                        this.fetchAndStoreMessage(
+                            gmail,
+                            userId,
+                            id,
+                            refreshTokenEncrypted,
+                        ),
                     ),
                 );
                 succeeded += results.filter(Boolean).length;
@@ -296,15 +395,19 @@ export class EmailSyncService {
         console.log(
             `[sync ${jobId}] fetch complete: ${succeeded} succeeded, ${failed} failed of ${messageIds.length}`,
         );
+
+        return { succeeded, failed };
     }
 
     private async fetchAndStoreMessage(
         gmail: GmailService,
         userId: string,
         messageId: string,
+        refreshTokenEncrypted: string | null,
     ): Promise<boolean> {
         try {
             let attempt = 0;
+            let refreshedOnce = false;
             let messageResponse;
             for (;;) {
                 try {
@@ -315,6 +418,23 @@ export class EmailSyncService {
                     });
                     break;
                 } catch (error) {
+                    if (isAuthError(error) && !refreshedOnce) {
+                        // Access token expired mid-sync. Refresh it and
+                        // retry this same request once — the outer
+                        // ensureFreshToken dedupes so concurrent requests
+                        // hitting a 401 at the same time only trigger one
+                        // refresh call.
+                        refreshedOnce = true;
+                        console.warn(
+                            `[sync] access token expired fetching ${messageId}, refreshing`,
+                        );
+                        await this.ensureFreshToken(
+                            gmail,
+                            userId,
+                            refreshTokenEncrypted,
+                        );
+                        continue;
+                    }
                     if (
                         !isRateLimitError(error) ||
                         attempt >= this.maxRetries
@@ -390,6 +510,12 @@ export class EmailSyncService {
             }
             return true;
         } catch (error) {
+            if (error instanceof TokenRefreshFailedError) {
+                // Every remaining request will fail the same way — let
+                // this propagate out of batchFetchAndStore/the sync loop
+                // instead of being counted as a single per-message failure.
+                throw error;
+            }
             const err = error as { code?: number; message?: string };
             console.error(
                 `Failed to fetch message ${messageId}: [${err.code ?? '?'}] ${err.message ?? String(error)}`,
