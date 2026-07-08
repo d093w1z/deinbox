@@ -288,6 +288,10 @@ export class EmailSyncService {
 
             if (!historyResponse.data.history) {
                 // No changes
+                await db.query(
+                    'UPDATE users SET sync_status = $1, last_sync_at = NOW() WHERE id = $2',
+                    ['completed', userId],
+                );
                 await updateJobStatus(jobId, 'completed', 100, 0);
                 return;
             }
@@ -340,8 +344,8 @@ export class EmailSyncService {
 
             // Update history ID
             await db.query(
-                'UPDATE users SET history_id = $1, last_sync_at = NOW() WHERE id = $2',
-                [historyResponse.data.historyId, userId],
+                'UPDATE users SET sync_status = $1, history_id = $2, last_sync_at = NOW() WHERE id = $3',
+                ['completed', historyResponse.data.historyId, userId],
             );
 
             await updateJobStatus(jobId, 'completed', 100, changes.length);
