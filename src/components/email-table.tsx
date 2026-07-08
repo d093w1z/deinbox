@@ -303,8 +303,15 @@ const TAB_CATEGORY_MAP: Record<string, string | null> = {
 
 export function EmailTable({
     data: initialData,
+    showCategoryTabs = true,
 }: {
     data: Email[] | undefined;
+    // Callers that already filter by category themselves (server-side,
+    // URL-synced) should pass false — otherwise this table's own tabs
+    // silently re-filter on top with a different, narrower set of
+    // categories (no "forums"), which is confusing and easy to get out of
+    // sync with the caller's own filter.
+    showCategoryTabs?: boolean;
 }) {
     const [data, setData] = React.useState<Email[]>(() => initialData ?? []);
     const [activeTab, setActiveTab] = React.useState('all');
@@ -441,33 +448,41 @@ export function EmailTable({
             className='w-full flex-col justify-start gap-6'
         >
             <div className='flex items-center justify-between px-4 lg:px-6'>
-                <Label htmlFor='view-selector' className='sr-only'>
-                    View
-                </Label>
-                <Select value={activeTab} onValueChange={setActiveTab}>
-                    <SelectTrigger
-                        className='flex w-fit @4xl/main:hidden'
-                        size='sm'
-                        id='view-selector'
-                    >
-                        <SelectValue placeholder='Select a view' />
-                    </SelectTrigger>
-                    <SelectContent>
-                        <SelectItem value='all'>All</SelectItem>
-                        <SelectItem value='inbox'>Inbox</SelectItem>
-                        <SelectItem value='updates'>Updates</SelectItem>
-                        <SelectItem value='promotions'>Promotions</SelectItem>
-                        <SelectItem value='social'>Social</SelectItem>
-                    </SelectContent>
-                </Select>
-                <TabsList className='**:data-[slot=badge]:bg-muted-foreground/30 hidden **:data-[slot=badge]:size-5 **:data-[slot=badge]:rounded-full **:data-[slot=badge]:px-1 @4xl/main:flex'>
-                    <TabsTrigger value='all'>All</TabsTrigger>
-                    <TabsTrigger value='inbox'>Inbox</TabsTrigger>
-                    <TabsTrigger value='updates'>Updates</TabsTrigger>
-                    <TabsTrigger value='promotions'>Promotions</TabsTrigger>
-                    <TabsTrigger value='social'>Social</TabsTrigger>
-                </TabsList>
-                <div className='flex items-center gap-2'>
+                {showCategoryTabs && (
+                    <>
+                        <Label htmlFor='view-selector' className='sr-only'>
+                            View
+                        </Label>
+                        <Select value={activeTab} onValueChange={setActiveTab}>
+                            <SelectTrigger
+                                className='flex w-fit @4xl/main:hidden'
+                                size='sm'
+                                id='view-selector'
+                            >
+                                <SelectValue placeholder='Select a view' />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value='all'>All</SelectItem>
+                                <SelectItem value='inbox'>Inbox</SelectItem>
+                                <SelectItem value='updates'>Updates</SelectItem>
+                                <SelectItem value='promotions'>
+                                    Promotions
+                                </SelectItem>
+                                <SelectItem value='social'>Social</SelectItem>
+                            </SelectContent>
+                        </Select>
+                        <TabsList className='**:data-[slot=badge]:bg-muted-foreground/30 hidden **:data-[slot=badge]:size-5 **:data-[slot=badge]:rounded-full **:data-[slot=badge]:px-1 @4xl/main:flex'>
+                            <TabsTrigger value='all'>All</TabsTrigger>
+                            <TabsTrigger value='inbox'>Inbox</TabsTrigger>
+                            <TabsTrigger value='updates'>Updates</TabsTrigger>
+                            <TabsTrigger value='promotions'>
+                                Promotions
+                            </TabsTrigger>
+                            <TabsTrigger value='social'>Social</TabsTrigger>
+                        </TabsList>
+                    </>
+                )}
+                <div className='ml-auto flex items-center gap-2'>
                     {selectedIds.length > 0 && (
                         <>
                             <Button
