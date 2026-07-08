@@ -13,8 +13,12 @@ export async function POST(_req: NextRequest) {
 
     try {
         // Get user
-        const userResult = await db.query<{ id: string; sync_status: string }>(
-            'SELECT id, sync_status FROM users WHERE email = $1',
+        const userResult = await db.query<{
+            id: string;
+            sync_status: string;
+            history_id: string | null;
+        }>(
+            'SELECT id, sync_status, history_id FROM users WHERE email = $1',
             [session.user.email],
         );
 
@@ -52,9 +56,13 @@ export async function POST(_req: NextRequest) {
             );
         }
 
-        // Determine sync type
-        const syncType =
-            user.sync_status === 'completed' ? 'incremental' : 'full';
+        // Determine sync type. Whether a previous sync fully succeeded is
+        // irrelevant here — what matters is whether we have a history_id
+        // checkpoint to diff from. A prior run that synced 49,970 of 50,000
+        // messages (and got marked 'failed' for the stragglers) still left
+        // behind a perfectly usable checkpoint; forcing a full re-sync in
+        // that case would just re-fetch everything for no benefit.
+        const syncType = user.history_id ? 'incremental' : 'full';
 
         // Create sync job record. A unique partial index on
         // sync_jobs(user_id) WHERE status IN ('pending','processing')

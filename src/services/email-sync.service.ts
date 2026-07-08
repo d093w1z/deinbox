@@ -131,6 +131,11 @@ export class EmailSyncService {
             // Get total count first
             const profile = await gmail.getProfile();
             const totalMessages = profile.messagesTotal || 0;
+            // Checkpoint captured *before* listing/fetching begins, so the
+            // next incremental sync's history.list call also picks up any
+            // changes that happened during this (potentially hour-long)
+            // full sync — not just changes after it finished.
+            const startHistoryId = profile.historyId ?? null;
 
             await db.query(
                 'UPDATE sync_jobs SET total_items = $1 WHERE id = $2',
@@ -203,8 +208,8 @@ export class EmailSyncService {
                 const message = `${failed} of ${messageIds.length} messages failed to sync`;
 
                 await db.query(
-                    'UPDATE users SET sync_status = $1, last_sync_at = NOW(), total_emails = $2 WHERE id = $3',
-                    ['failed', succeeded, userId],
+                    'UPDATE users SET sync_status = $1, last_sync_at = NOW(), total_emails = $2, history_id = COALESCE($3, history_id) WHERE id = $4',
+                    ['failed', succeeded, startHistoryId, userId],
                 );
                 await updateJobStatus(
                     jobId,
@@ -216,10 +221,14 @@ export class EmailSyncService {
                 throw new Error(message);
             }
 
-            // Update user sync status
+            // Update user sync status. The message *listing* completed
+            // successfully by this point regardless of the failed count
+            // above, so history_id is always safe to persist here — it
+            // lets the next sync go incremental instead of re-listing and
+            // re-fetching everything from scratch again.
             await db.query(
-                'UPDATE users SET sync_status = $1, last_sync_at = NOW(), total_emails = $2 WHERE id = $3',
-                ['completed', messageIds.length, userId],
+                'UPDATE users SET sync_status = $1, last_sync_at = NOW(), total_emails = $2, history_id = COALESCE($3, history_id) WHERE id = $4',
+                ['completed', messageIds.length, startHistoryId, userId],
             );
 
             await updateJobStatus(jobId, 'completed', 100, messageIds.length);
