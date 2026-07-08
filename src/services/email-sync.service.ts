@@ -18,6 +18,28 @@ function isAuthError(error: unknown): boolean {
     return err?.code === 401;
 }
 
+// Transient, non-Gmail-specific network failures (DNS blips, connection
+// resets/timeouts). Unlike a real API error, the request never reached
+// Gmail at all, so retrying once the network recovers is almost always
+// enough — a brief internet drop shouldn't fail the whole sync.
+const TRANSIENT_NETWORK_ERROR_CODES = new Set([
+    'EAI_AGAIN',
+    'ENOTFOUND',
+    'ECONNRESET',
+    'ECONNREFUSED',
+    'ETIMEDOUT',
+    'ENETUNREACH',
+    'EHOSTUNREACH',
+    'EPIPE',
+    'UND_ERR_CONNECT_TIMEOUT',
+    'UND_ERR_SOCKET',
+]);
+
+function isTransientNetworkError(error: unknown): boolean {
+    const err = error as { code?: string } | undefined;
+    return !!err?.code && TRANSIENT_NETWORK_ERROR_CODES.has(err.code);
+}
+
 // Thrown when a mid-sync token refresh itself fails (e.g. the refresh
 // token was revoked). Unlike a single message failing to fetch, this
 // means every remaining request will fail the same way, so it's treated
@@ -435,15 +457,17 @@ export class EmailSyncService {
                         );
                         continue;
                     }
+                    const rateLimited = isRateLimitError(error);
+                    const transientNetwork = isTransientNetworkError(error);
                     if (
-                        !isRateLimitError(error) ||
+                        (!rateLimited && !transientNetwork) ||
                         attempt >= this.maxRetries
                     ) {
                         throw error;
                     }
                     const delayMs = 1000 * 2 ** attempt;
                     console.warn(
-                        `[sync] rate limited fetching ${messageId}, retrying in ${delayMs}ms (attempt ${attempt + 1}/${this.maxRetries})`,
+                        `[sync] ${rateLimited ? 'rate limited' : 'transient network error'} fetching ${messageId}, retrying in ${delayMs}ms (attempt ${attempt + 1}/${this.maxRetries})`,
                     );
                     await sleep(delayMs);
                     attempt++;
