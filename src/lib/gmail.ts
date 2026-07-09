@@ -268,19 +268,33 @@ class GmailService {
                 return cached;
             }
 
-            // Fetch promotional emails
-            const promotionalEmails = await this.getMessages(
-                'category:promotions',
+            // Fetch promotional message ids, then pull each full message
+            // exactly once in parallel — getMessages() already does a
+            // full fetch per message internally to build its Email[]
+            // return value, but doesn't keep the raw headers we need
+            // here (List-Unsubscribe), so re-fetching sequentially
+            // through it as a second pass was doing 2N Gmail API calls
+            // for N candidate messages. A single list + parallel get
+            // pass does N+1.
+            const listResponse = await this.gmail.users.messages.list({
+                userId: 'me',
+                q: 'category:promotions',
+            });
+            const messageIds = listResponse.data.messages ?? [];
+
+            const fullMessages = await Promise.all(
+                messageIds.map((m) =>
+                    this.gmail.users.messages.get({
+                        userId: 'me',
+                        id: m.id!,
+                        format: 'full',
+                    }),
+                ),
             );
+
             const unsubscribeInfo: UnsubscribeInfo[] = [];
 
-            for (const message of promotionalEmails) {
-                const fullMessage = await this.gmail.users.messages.get({
-                    userId: 'me',
-                    id: message.id,
-                    format: 'full',
-                });
-
+            for (const fullMessage of fullMessages) {
                 const headers = fullMessage.data.payload?.headers || [];
                 const unsubscribeHeader = headers.find(
                     (h: gmail_v1.Schema$MessagePartHeader) =>
@@ -293,12 +307,16 @@ class GmailService {
                         unsubscribeValue!.match(/<(https?:\/\/[^>]+)>/);
                     const emailMatch =
                         unsubscribeValue!.match(/<mailto:([^>]+)>/);
+                    const fromHeader = headers.find(
+                        (h: gmail_v1.Schema$MessagePartHeader) =>
+                            h.name!.toLowerCase() === 'from',
+                    );
 
                     unsubscribeInfo.push({
-                        messageId: message.id,
+                        messageId: fullMessage.data.id!,
                         unsubscribeUrl: urlMatch?.[1],
                         unsubscribeEmail: emailMatch?.[1],
-                        sender: this.extractEmail(message.from),
+                        sender: this.extractEmail(fromHeader?.value ?? ''),
                     });
                 }
             }
