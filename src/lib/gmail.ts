@@ -8,6 +8,18 @@ import type { Email } from '@/types/EmailSchema';
 import type { EmailStats } from '@/types/EmailStats';
 import type { UnsubscribeInfo } from '@/types/UnsubscribeInfo';
 import { mapGmailError } from './gmail-error';
+
+// Gmail's batchModify caps a single call at 1000 message ids.
+const BATCH_LIMIT = 1000;
+
+function chunkForBatch<T>(items: T[]): T[][] {
+    const chunks: T[][] = [];
+    for (let i = 0; i < items.length; i += BATCH_LIMIT) {
+        chunks.push(items.slice(i, i + BATCH_LIMIT));
+    }
+    return chunks;
+}
+
 class GmailService {
     private gmail: gmail_v1.Gmail;
     private auth: InstanceType<typeof google.auth.OAuth2>;
@@ -167,13 +179,24 @@ class GmailService {
         }
     }
 
+    // Our OAuth scope is gmail.modify, not the full-account
+    // https://mail.google.com/ scope, so we can't call messages.delete
+    // (permanent delete) — batchModify into TRASH is the closest
+    // equivalent, and it has the added benefit of being undoable via
+    // undeleteMessages. batchModify caps out at 1000 ids per call, so
+    // larger selections are chunked.
     async deleteMessages(messageIds: string[]): Promise<void> {
         try {
-            await Promise.all(
-                messageIds.map((id) =>
-                    this.gmail.users.messages.delete({ userId: 'me', id }),
-                ),
-            );
+            for (const chunk of chunkForBatch(messageIds)) {
+                await this.gmail.users.messages.batchModify({
+                    userId: 'me',
+                    requestBody: {
+                        ids: chunk,
+                        addLabelIds: ['TRASH'],
+                        removeLabelIds: ['INBOX'],
+                    },
+                });
+            }
 
             await this.invalidateMessageCaches();
         } catch (error) {
@@ -183,17 +206,55 @@ class GmailService {
         }
     }
 
+    async undeleteMessages(messageIds: string[]): Promise<void> {
+        try {
+            for (const chunk of chunkForBatch(messageIds)) {
+                await this.gmail.users.messages.batchModify({
+                    userId: 'me',
+                    requestBody: {
+                        ids: chunk,
+                        addLabelIds: ['INBOX'],
+                        removeLabelIds: ['TRASH'],
+                    },
+                });
+            }
+
+            await this.invalidateMessageCaches();
+        } catch (error) {
+            console.error('Error restoring messages:', error);
+            throw new Error('Failed to restore messages');
+        }
+    }
+
     async archiveMessages(messageIds: string[]): Promise<void> {
         try {
-            await this.gmail.users.messages.batchModify({
-                userId: 'me',
-                requestBody: { ids: messageIds, removeLabelIds: ['INBOX'] },
-            });
+            for (const chunk of chunkForBatch(messageIds)) {
+                await this.gmail.users.messages.batchModify({
+                    userId: 'me',
+                    requestBody: { ids: chunk, removeLabelIds: ['INBOX'] },
+                });
+            }
 
             await this.invalidateMessageCaches();
         } catch (error) {
             console.error('Error archiving messages:', error);
             throw new Error('Failed to archive messages');
+        }
+    }
+
+    async unarchiveMessages(messageIds: string[]): Promise<void> {
+        try {
+            for (const chunk of chunkForBatch(messageIds)) {
+                await this.gmail.users.messages.batchModify({
+                    userId: 'me',
+                    requestBody: { ids: chunk, addLabelIds: ['INBOX'] },
+                });
+            }
+
+            await this.invalidateMessageCaches();
+        } catch (error) {
+            console.error('Error unarchiving messages:', error);
+            throw new Error('Failed to unarchive messages');
         }
     }
 
