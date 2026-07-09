@@ -18,6 +18,7 @@ import {
     TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { EmailSchema } from '@/types/EmailSchema';
+import type { PaginationState, SortingState } from '@tanstack/react-table';
 import {
     IconHelpCircle,
     IconLoader,
@@ -73,6 +74,14 @@ export default function EmailsPage() {
     const [sender, setSender] = useState(searchParams.get('sender') ?? '');
     const [ids, setIds] = useState(searchParams.get('ids') ?? '');
 
+    const [pagination, setPagination] = useState<PaginationState>({
+        pageIndex: 0,
+        pageSize: 50,
+    });
+    const [sorting, setSorting] = useState<SortingState>([
+        { id: 'date', desc: true },
+    ]);
+
     if (status === 'unauthenticated') {
         redirect('/login');
     }
@@ -107,7 +116,16 @@ export default function EmailsPage() {
             setLoading(true);
             setError('');
             try {
-                const params = new URLSearchParams({ category });
+                const sort = sorting[0];
+                const params = new URLSearchParams({
+                    category,
+                    page: String(pagination.pageIndex + 1),
+                    limit: String(pagination.pageSize),
+                });
+                if (sort) {
+                    params.set('sort', sort.id);
+                    params.set('dir', sort.desc ? 'desc' : 'asc');
+                }
                 if (q) params.set('q', q);
                 if (gmailLabel) params.set('label', gmailLabel);
                 if (sender) params.set('sender', sender);
@@ -130,7 +148,7 @@ export default function EmailsPage() {
                 if (!signal.aborted) setLoading(false);
             }
         },
-        [category, q, gmailLabel, sender, ids],
+        [category, q, gmailLabel, sender, ids, pagination, sorting],
     );
 
     // Cancel any in-flight fetch when the filters change again before it
@@ -141,6 +159,12 @@ export default function EmailsPage() {
         void fetchEmails(controller.signal);
         return () => controller.abort();
     }, [fetchEmails, status]);
+
+    // Any filter/search change invalidates the current page.
+    useEffect(() => {
+        setPagination((p) => ({ ...p, pageIndex: 0 }));
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [category, q, gmailLabel, sender, ids]);
 
     // Independent, unfiltered, one-time check so a filter combo that
     // legitimately matches zero emails isn't mistaken for "never synced".
@@ -306,7 +330,17 @@ export default function EmailsPage() {
                     No emails match these filters.
                 </p>
             ) : (
-                <EmailTable data={emails} showCategoryTabs={false} />
+                <EmailTable
+                    data={emails}
+                    showCategoryTabs={false}
+                    manualPagination
+                    pageCount={Math.max(1, Math.ceil(total / pagination.pageSize))}
+                    pagination={pagination}
+                    onPaginationChange={setPagination}
+                    manualSorting
+                    sorting={sorting}
+                    onSortingChange={setSorting}
+                />
             )}
         </div>
     );

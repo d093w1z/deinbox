@@ -19,6 +19,15 @@ interface MessageRowWithCount extends MessageRow {
     total_count: string;
 }
 
+const SORTABLE_COLUMNS: Record<string, string> = {
+    date: 'date',
+    from: 'sender_email',
+    subject: 'subject',
+    category: 'category',
+    isUnread: 'is_unread',
+    size: 'size_bytes',
+};
+
 export async function GET(req: NextRequest) {
     const session = await getServerSession();
     if (!session?.user?.email) {
@@ -37,10 +46,14 @@ export async function GET(req: NextRequest) {
     const label = searchParams.get('label')?.trim();
     const ids = searchParams.get('ids')?.trim();
     const limit = Math.min(
-        Number(searchParams.get('limit') ?? '1000') || 1000,
+        Number(searchParams.get('limit') ?? '50') || 50,
         1000,
     );
     const page = Math.max(Number(searchParams.get('page') ?? '1') || 1, 1);
+    const sortColumn =
+        SORTABLE_COLUMNS[searchParams.get('sort') ?? ''] ?? 'date';
+    const sortDir =
+        searchParams.get('dir') === 'asc' ? 'ASC' : 'DESC';
 
     const parsed = q ? parseSearchQuery(q) : null;
 
@@ -168,7 +181,7 @@ export async function GET(req: NextRequest) {
                 COUNT(*) OVER() AS total_count
              FROM email_messages
              WHERE ${conditions.join(' AND ')}
-             ORDER BY date DESC
+             ORDER BY ${sortColumn} ${sortDir}
              LIMIT $${params.length - 1} OFFSET $${params.length}`,
             params,
         );

@@ -21,6 +21,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import {
+    IconArrowsSort,
     IconChevronDown,
     IconChevronLeft,
     IconChevronRight,
@@ -32,12 +33,17 @@ import {
     IconLayoutColumns,
     IconLoader,
     IconPaperclip,
+    IconSortAscending,
+    IconSortDescending,
     IconTrash,
     IconArchive,
 } from '@tabler/icons-react';
 import type {
+    Column,
     ColumnDef,
     ColumnFiltersState,
+    OnChangeFn,
+    PaginationState,
     Row,
     SortingState,
     VisibilityState,
@@ -109,6 +115,35 @@ async function bulkAction(
     return res.ok;
 }
 
+function SortableHeader({
+    column,
+    children,
+    align = 'left',
+}: {
+    column: Column<Email, unknown>;
+    children: React.ReactNode;
+    align?: 'left' | 'right';
+}) {
+    const sorted = column.getIsSorted();
+    return (
+        <Button
+            variant='ghost'
+            size='sm'
+            className={`h-8 ${align === 'right' ? '-mr-3 ml-auto flex w-full justify-end' : '-ml-3'}`}
+            onClick={column.getToggleSortingHandler()}
+        >
+            {children}
+            {sorted === 'asc' ? (
+                <IconSortAscending className='ml-1 size-3.5' />
+            ) : sorted === 'desc' ? (
+                <IconSortDescending className='ml-1 size-3.5' />
+            ) : (
+                <IconArrowsSort className='ml-1 size-3.5 opacity-40' />
+            )}
+        </Button>
+    );
+}
+
 function DragHandle({ id }: { id: string }) {
     const { attributes, listeners } = useSortable({ id });
     return (
@@ -166,13 +201,17 @@ function buildColumns(
         },
         {
             accessorKey: 'from',
-            header: 'From',
+            header: ({ column }) => (
+                <SortableHeader column={column}>From</SortableHeader>
+            ),
             cell: ({ row }) => <TableCellViewer item={row.original} />,
             enableHiding: false,
         },
         {
             accessorKey: 'subject',
-            header: 'Subject',
+            header: ({ column }) => (
+                <SortableHeader column={column}>Subject</SortableHeader>
+            ),
             cell: ({ row }) => (
                 <div className='max-w-64 truncate'>
                     {row.original.subject || '(No subject)'}
@@ -181,7 +220,9 @@ function buildColumns(
         },
         {
             accessorKey: 'category',
-            header: 'Category',
+            header: ({ column }) => (
+                <SortableHeader column={column}>Category</SortableHeader>
+            ),
             cell: ({ row }) => (
                 <Badge
                     variant='outline'
@@ -193,7 +234,9 @@ function buildColumns(
         },
         {
             accessorKey: 'isUnread',
-            header: 'Status',
+            header: ({ column }) => (
+                <SortableHeader column={column}>Status</SortableHeader>
+            ),
             cell: ({ row }) => (
                 <Badge
                     variant='outline'
@@ -210,7 +253,11 @@ function buildColumns(
         },
         {
             accessorKey: 'date',
-            header: () => <div className='w-full text-right'>Date</div>,
+            header: ({ column }) => (
+                <SortableHeader column={column} align='right'>
+                    Date
+                </SortableHeader>
+            ),
             cell: ({ row }) => (
                 <div className='text-muted-foreground text-right text-sm'>
                     {new Date(row.original.date).toLocaleDateString('en-US')}
@@ -219,7 +266,11 @@ function buildColumns(
         },
         {
             accessorKey: 'size',
-            header: () => <div className='w-full text-right'>Size</div>,
+            header: ({ column }) => (
+                <SortableHeader column={column} align='right'>
+                    Size
+                </SortableHeader>
+            ),
             cell: ({ row }) => (
                 <div className='text-muted-foreground text-right text-sm'>
                     {(row.original.size / 1024).toFixed(1)} KB
@@ -304,6 +355,13 @@ const TAB_CATEGORY_MAP: Record<string, string | null> = {
 export function EmailTable({
     data: initialData,
     showCategoryTabs = true,
+    manualPagination = false,
+    pageCount,
+    pagination: controlledPagination,
+    onPaginationChange: onPaginationChangeProp,
+    manualSorting = false,
+    sorting: controlledSorting,
+    onSortingChange: onSortingChangeProp,
 }: {
     data: Email[] | undefined;
     // Callers that already filter by category themselves (server-side,
@@ -312,6 +370,20 @@ export function EmailTable({
     // categories (no "forums"), which is confusing and easy to get out of
     // sync with the caller's own filter.
     showCategoryTabs?: boolean;
+    // Server-driven mode: caller fetches one page of already-sorted data at
+    // a time (e.g. /emails, which needs to reach every message in a large
+    // mailbox, not just whatever fits in one bounded client-side fetch).
+    // When these are set, `data` is assumed to be exactly the current page
+    // and this table stops slicing/sorting it locally — the caller's
+    // fetch is the source of truth. Omit them (the default) to keep the
+    // existing fully client-side behavior used by the dashboard widget.
+    manualPagination?: boolean;
+    pageCount?: number;
+    pagination?: PaginationState;
+    onPaginationChange?: OnChangeFn<PaginationState>;
+    manualSorting?: boolean;
+    sorting?: SortingState;
+    onSortingChange?: OnChangeFn<SortingState>;
 }) {
     const [data, setData] = React.useState<Email[]>(() => initialData ?? []);
     const [activeTab, setActiveTab] = React.useState('all');
@@ -320,11 +392,18 @@ export function EmailTable({
         React.useState<VisibilityState>({});
     const [columnFilters, setColumnFilters] =
         React.useState<ColumnFiltersState>([]);
-    const [sorting, setSorting] = React.useState<SortingState>([]);
-    const [pagination, setPagination] = React.useState({
-        pageIndex: 0,
-        pageSize: 10,
-    });
+    const [internalSorting, setInternalSorting] = React.useState<SortingState>(
+        [],
+    );
+    const [internalPagination, setInternalPagination] =
+        React.useState<PaginationState>({
+            pageIndex: 0,
+            pageSize: 10,
+        });
+    const sorting = manualSorting ? (controlledSorting ?? []) : internalSorting;
+    const pagination = manualPagination
+        ? (controlledPagination ?? { pageIndex: 0, pageSize: 10 })
+        : internalPagination;
     const [isBusy, setIsBusy] = React.useState(false);
     const sortableId = React.useId();
     const sensors = useSensors(
@@ -388,14 +467,23 @@ export function EmailTable({
         getRowId: (row) => row.id,
         enableRowSelection: true,
         onRowSelectionChange: setRowSelection,
-        onSortingChange: setSorting,
+        onSortingChange: manualSorting
+            ? onSortingChangeProp
+            : setInternalSorting,
         onColumnFiltersChange: setColumnFilters,
         onColumnVisibilityChange: setColumnVisibility,
-        onPaginationChange: setPagination,
+        onPaginationChange: manualPagination
+            ? onPaginationChangeProp
+            : setInternalPagination,
+        manualSorting,
+        manualPagination,
+        pageCount: manualPagination ? (pageCount ?? -1) : undefined,
         getCoreRowModel: getCoreRowModel(),
         getFilteredRowModel: getFilteredRowModel(),
-        getPaginationRowModel: getPaginationRowModel(),
-        getSortedRowModel: getSortedRowModel(),
+        getPaginationRowModel: manualPagination
+            ? undefined
+            : getPaginationRowModel(),
+        getSortedRowModel: manualSorting ? undefined : getSortedRowModel(),
         getFacetedRowModel: getFacetedRowModel(),
         getFacetedUniqueValues: getFacetedUniqueValues(),
     });
@@ -443,7 +531,9 @@ export function EmailTable({
             onValueChange={(v) => {
                 setActiveTab(v);
                 setRowSelection({});
-                setPagination((p) => ({ ...p, pageIndex: 0 }));
+                if (!manualPagination) {
+                    setInternalPagination((p) => ({ ...p, pageIndex: 0 }));
+                }
             }}
             className='w-full flex-col justify-start gap-6'
         >
